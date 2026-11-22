@@ -214,6 +214,51 @@
     "unreplied": "notify_only"
   },
   "confirmation_mode": true,
+  "ual_filters": {
+    "enabled": true,
+    "domains": [
+      "ual.es",
+      "gmail.ual.es",
+      "correo.ual.es",
+      "estudiantes.ual.es"
+    ],
+    "esi_keywords": [
+      "esi",
+      "escuela superior de ingeniería",
+      "escuela de ingeniería",
+      "ingeniería informática",
+      "ingeniería industrial",
+      "grado informática",
+      "master informática",
+      "tfm",
+      "tfg",
+      "prácticas",
+      "bolsa empleo",
+      "convocatoria",
+      "matrícula",
+      "calificaciones",
+      "horarios",
+      "aula virtual",
+      "moodle",
+      "ual.es/esi"
+    ],
+    "label_prefix": "UAL/"
+  },
+  "duplicate_detection": {
+    "enabled": true,
+    "auto_delete_promos": true,
+    "similarity_threshold": 0.85,
+    "check_days_back": 7,
+    "promo_senders": [
+      "noreply@",
+      "no-reply@",
+      "marketing@",
+      "promo@",
+      "offers@",
+      "deals@",
+      "newsletter@"
+    ]
+  },
   "digest": {
     "include_newsletters_count": true,
     "include_receipts_count": true,

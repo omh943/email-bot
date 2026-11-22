@@ -5,7 +5,7 @@ Aplica reglas para identificar newsletters, recibos y correos sin responder.
 import re
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Set
+from typing import List, Dict, Any, Set, Optional
 from email.utils import parsedate_to_datetime
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,21 @@ class EmailClassifier:
         
         # Configuración de confirmación
         self.confirmation_mode = self.rules.get("confirmation_mode", False)
+        
+        # UAL/ESI filters
+        ual_config = self.rules.get("ual_filters", {})
+        self.ual_enabled = ual_config.get("enabled", False)
+        self.ual_domains = [d.lower() for d in ual_config.get("domains", [])]
+        self.esi_keywords = [k.lower() for k in ual_config.get("esi_keywords", [])]
+        self.ual_label_prefix = ual_config.get("label_prefix", "UAL/")
+        
+        # Duplicate detection
+        dup_config = self.rules.get("duplicate_detection", {})
+        self.dup_enabled = dup_config.get("enabled", False)
+        self.dup_auto_delete = dup_config.get("auto_delete_promos", False)
+        self.dup_threshold = dup_config.get("similarity_threshold", 0.85)
+        self.dup_check_days = dup_config.get("check_days_back", 7)
+        self.dup_promo_senders = dup_config.get("promo_senders", [])
 
     def classify_batch(self, emails: List[Dict]) -> List[Dict]:
         """Clasifica un lote de correos"""
@@ -88,7 +103,7 @@ class EmailClassifier:
         """
         Clasifica un correo individual.
         Retorna: (categoría, acciones, confianza)
-        Categorías: 'newsletter', 'receipt', 'unreplied', 'other'
+        Categorías: 'newsletter', 'receipt', 'unreplied', 'ual', 'esi', 'protected', 'other'
         """
         subject = email.get("subject", "").lower()
         from_addr = email.get("from", "").lower()
@@ -99,6 +114,13 @@ class EmailClassifier:
         if self._is_protected(subject, from_addr, body):
             logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
             return "protected", [], 0.0
+
+        # Verificar UAL/ESI (prioridad alta - nunca archivar)
+        if self.ual_enabled:
+            ual_category = self._classify_ual(subject, from_addr, body)
+            if ual_category:
+                actions = self._get_actions_for_category(ual_category)
+                return ual_category, actions, 0.9
 
         # Verificar etiquetas existentes primero (más confiable)
         if any(l in self.newsletter_labels for l in labels):
@@ -124,6 +146,24 @@ class EmailClassifier:
             return "receipt", actions, receipt_score
 
         return "other", [], 0.0
+
+    def _classify_ual(self, subject: str, from_addr: str, body: str) -> Optional[str]:
+        """Clasifica correos de UAL/ESI"""
+        if not self.ual_enabled:
+            return None
+            
+        # Verificar dominio UAL
+        is_ual_domain = any(domain in from_addr for domain in self.ual_domains)
+        
+        # Verificar palabras clave ESI
+        is_esi = any(kw in subject or kw in body for kw in self.esi_keywords)
+        
+        if is_ual_domain or is_esi:
+            if is_esi:
+                return "esi"
+            return "ual"
+        
+        return None
 
     def _is_protected(self, subject: str, from_addr: str, body: str) -> bool:
         """Verifica si el correo tiene contenido protegido que no debe archivarse"""
@@ -152,6 +192,10 @@ class EmailClassifier:
             base_action = "label_newsletter"
         elif category == "receipt":
             base_action = "label_receipt"
+        elif category == "ual":
+            base_action = "label_ual"
+        elif category == "esi":
+            base_action = "label_esi"
         else:
             return []
 
@@ -303,3 +347,60 @@ class EmailClassifier:
     def get_unreplied_emails(self, emails: List[Dict], threshold_days: int) -> List[Dict]:
         """Filtra correos sin responder de una lista"""
         return [e for e in emails if self.is_unreplied(e, threshold_days)]
+
+    def find_duplicates(self, emails: List[Dict]) -> List[Dict]:
+        """
+        Detecta emails promocionales duplicados basándose en similitud de asunto
+        y remitente. Retorna lista de emails a eliminar (los más antiguos).
+        """
+        if not self.dup_enabled:
+            return []
+        
+        from difflib import SequenceMatcher
+        
+        # Filtrar solo emails promocionales
+        promo_emails = []
+        for email in emails:
+            from_addr = email.get("from", "").lower()
+            is_promo = any(sender in from_addr for sender in self.dup_promo_senders)
+            if is_promo:
+                promo_emails.append(email)
+        
+        if len(promo_emails) < 2:
+            return []
+        
+        # Ordenar por fecha (más recientes primero)
+        def get_date(email):
+            try:
+                date_str = email.get("date", "")
+                if date_str:
+                    dt = parsedate_to_datetime(date_str)
+                    if dt.tzinfo:
+                        dt = dt.replace(tzinfo=None)
+                    return dt
+            except Exception:
+                pass
+            return datetime.min
+        
+        promo_emails.sort(key=get_date, reverse=True)
+        
+        to_delete = []
+        seen_subjects = []
+        
+        for email in promo_emails:
+            subject = email.get("subject", "").lower()
+            is_duplicate = False
+            
+            for seen_subject in seen_subjects:
+                similarity = SequenceMatcher(None, subject, seen_subject).ratio()
+                if similarity >= self.dup_threshold:
+                    is_duplicate = True
+                    break
+            
+            if is_duplicate:
+                to_delete.append(email)
+            else:
+                seen_subjects.append(subject)
+        
+        logger.info(f"Duplicados promocionales detectados: {len(to_delete)}")
+        return to_delete

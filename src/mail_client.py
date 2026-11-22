@@ -10,6 +10,7 @@ import imaplib
 import email
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.header import decode_header, make_header
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -45,6 +46,17 @@ class MailClient:
         self.labels_cache = {}
         self._use_gmail_api = not USE_IMAP and GMAIL_API_AVAILABLE
         self._rules = rules or {}
+
+    @staticmethod
+    def _decode_header(header_value: str) -> str:
+        """Decodifica cabeceras RFC 2047 (ej: '=?UTF-8?Q?Nombre?=')"""
+        if not header_value:
+            return ""
+        try:
+            decoded = make_header(decode_header(header_value))
+            return str(decoded)
+        except Exception:
+            return header_value
 
     def connect(self) -> None:
         """Establece conexión con el servidor de correo"""
@@ -209,12 +221,17 @@ class MailClient:
         # Extraer cuerpo
         body = self._extract_gmail_body(payload)
 
+        # Decodificar cabeceras RFC 2047
+        subject = self._decode_header(headers.get("Subject", ""))
+        from_addr = self._decode_header(headers.get("From", ""))
+        to_addr = self._decode_header(headers.get("To", ""))
+
         return {
             "id": msg["id"],
             "thread_id": msg.get("threadId"),
-            "subject": headers.get("Subject", ""),
-            "from": headers.get("From", ""),
-            "to": headers.get("To", ""),
+            "subject": subject,
+            "from": from_addr,
+            "to": to_addr,
             "date": headers.get("Date", ""),
             "body": body,
             "snippet": msg.get("snippet", ""),
@@ -261,12 +278,17 @@ class MailClient:
         else:
             body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
 
+        # Decodificar cabeceras RFC 2047
+        subject = self._decode_header(msg.get("Subject", ""))
+        from_addr = self._decode_header(msg.get("From", ""))
+        to_addr = self._decode_header(msg.get("To", ""))
+
         return {
             "id": msg_id,
             "thread_id": msg_id,
-            "subject": msg.get("Subject", ""),
-            "from": msg.get("From", ""),
-            "to": msg.get("To", ""),
+            "subject": subject,
+            "from": from_addr,
+            "to": to_addr,
             "date": msg.get("Date", ""),
             "body": body,
             "snippet": body[:200],
@@ -281,8 +303,11 @@ class MailClient:
             "newsletters_archived": 0,
             "receipts_labeled": 0,
             "receipts_archived": 0,
+            "ual_labeled": 0,
+            "esi_labeled": 0,
             "pending_review": 0,
             "protected_skipped": 0,
+            "duplicates_deleted": 0,
             "errors": 0
         }
 
@@ -311,6 +336,10 @@ class MailClient:
                     stats["receipts_labeled"] += 1
                 if "archive" in actions and category == "receipt":
                     stats["receipts_archived"] += 1
+                if "label_ual" in actions:
+                    stats["ual_labeled"] += 1
+                if "label_esi" in actions:
+                    stats["esi_labeled"] += 1
                 if "label_pending_review" in actions:
                     stats["pending_review"] += 1
 
@@ -334,6 +363,18 @@ class MailClient:
         elif category == "receipt":
             if "label_receipt" in actions:
                 label_ids.append(self._get_or_create_label("Recibos"))
+            if "archive" in actions:
+                remove_label_ids.append("INBOX")
+
+        elif category == "ual":
+            if "label_ual" in actions:
+                label_ids.append(self._get_or_create_label("UAL"))
+            if "archive" in actions:
+                remove_label_ids.append("INBOX")
+
+        elif category == "esi":
+            if "label_esi" in actions:
+                label_ids.append(self._get_or_create_label("UAL/ESI"))
             if "archive" in actions:
                 remove_label_ids.append("INBOX")
 
@@ -373,6 +414,36 @@ class MailClient:
 
         # Expulsar eliminados
         self.imap_conn.expunge()
+
+    def delete_emails(self, email_ids: List[str]) -> int:
+        """Elimina emails permanentemente (mueve a papelera)"""
+        if not email_ids:
+            return 0
+            
+        deleted = 0
+        try:
+            if self._use_gmail_api:
+                for email_id in email_ids:
+                    try:
+                        self.service.users().messages().trash(
+                            userId="me", id=email_id
+                        ).execute()
+                        deleted += 1
+                    except Exception as e:
+                        logger.error(f"Error eliminando email {email_id}: {e}")
+            else:
+                # IMAP: marcar como eliminados
+                for email_id in email_ids:
+                    try:
+                        self.imap_conn.store(email_id, "+FLAGS", "\\Deleted")
+                        deleted += 1
+                    except Exception as e:
+                        logger.error(f"Error eliminando email {email_id}: {e}")
+                self.imap_conn.expunge()
+        except Exception as e:
+            logger.error(f"Error en eliminación masiva: {e}")
+            
+        return deleted
 
     def send_digest(self, digest: Dict[str, Any]) -> bool:
         """Envía el resumen por correo y Telegram"""

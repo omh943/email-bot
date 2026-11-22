@@ -24,7 +24,8 @@ class DigestBuilder:
         unreplied_emails: List[Dict],
         stats: Dict[str, int],
         threshold_days: int,
-        pending_review_emails: List[Dict] = None
+        pending_review_emails: List[Dict] = None,
+        ual_emails: List[Dict] = None
     ) -> Dict[str, Any]:
         """
         Construye el resumen completo.
@@ -32,6 +33,8 @@ class DigestBuilder:
         """
         if pending_review_emails is None:
             pending_review_emails = []
+        if ual_emails is None:
+            ual_emails = []
             
         date_str = datetime.now().strftime("%d/%m/%Y")
         subject = f"📧 Resumen diario de correo - {date_str}"
@@ -65,6 +68,15 @@ class DigestBuilder:
             text_parts.append("\n✅ No hay correos pendientes de revisión.")
             html_parts.append("<p style='color: green;'>✅ No hay correos pendientes de revisión.</p>")
 
+        # Correos UAL/ESI (con secciones colapsables)
+        max_ual = self.digest_config.get("max_ual_shown", 50)
+        if ual_emails:
+            text_parts.append(self._build_text_ual(ual_emails, max_ual))
+            html_parts.append(self._build_html_ual(ual_emails, max_ual))
+        elif self.digest_config.get("include_ual_list", True):
+            text_parts.append("\n✅ No hay correos UAL/ESI.")
+            html_parts.append("<p style='color: green;'>✅ No hay correos UAL/ESI.</p>")
+
         # Pie
         text_parts.append(self._build_text_footer())
         html_parts.append(self._build_html_footer())
@@ -79,7 +91,10 @@ class DigestBuilder:
             "generated_at": datetime.now().isoformat(),
             "stats": stats,
             "unreplied_count": len(unreplied_emails),
-            "pending_review_count": len(pending_review_emails)
+            "pending_review_count": len(pending_review_emails),
+            "ual_count": len(ual_emails),
+            "ual_emails": ual_emails,
+            "pending_review_emails": pending_review_emails
         }
 
     def _build_text_header(self, date_str: str, stats: Dict, threshold_days: int) -> str:
@@ -281,6 +296,182 @@ class DigestBuilder:
         {more}
 """
 
+    def _build_text_ual(self, emails: List[Dict], max_shown: int) -> str:
+        # Separar UAL general y ESI
+        esi_emails = []
+        ual_general = []
+        for email in emails:
+            subject = email.get("subject", "").lower()
+            body = email.get("body", "").lower()
+            from_addr = email.get("from", "").lower()
+            is_esi = any(kw in subject or kw in body or kw in from_addr 
+                        for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"])
+            if is_esi:
+                esi_emails.append(email)
+            else:
+                ual_general.append(email)
+        
+        lines = [f"\n🏫 CORREOS UAL / ESI (ordenados por recientes)", "─" * 40]
+        
+        if ual_general:
+            lines.append(f"\n📍 UAL General ({len(ual_general)}):")
+            shown = ual_general[:max_shown]
+            for i, email in enumerate(shown, 1):
+                subject = email.get("subject", "(sin asunto)")
+                from_addr = email.get("from", "(desconocido)")
+                date_str = email.get("date", "")
+                try:
+                    if date_str:
+                        dt = parsedate_to_datetime(date_str)
+                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date_fmt = "Fecha desconocida"
+                except Exception:
+                    date_fmt = "Fecha inválida"
+                if len(from_addr) > 50:
+                    from_addr = from_addr[:47] + "..."
+                lines.append(f"  {i}. {subject}")
+                lines.append(f"     De: {from_addr} | {date_fmt}")
+            if len(ual_general) > max_shown:
+                lines.append(f"  ... y {len(ual_general) - max_shown} más")
+        
+        if esi_emails:
+            lines.append(f"\n🏗️ ESI - Escuela Superior de Ingeniería ({len(esi_emails)}):")
+            shown = esi_emails[:max_shown]
+            for i, email in enumerate(shown, 1):
+                subject = email.get("subject", "(sin asunto)")
+                from_addr = email.get("from", "(desconocido)")
+                date_str = email.get("date", "")
+                try:
+                    if date_str:
+                        dt = parsedate_to_datetime(date_str)
+                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date_fmt = "Fecha desconocida"
+                except Exception:
+                    date_fmt = "Fecha inválida"
+                if len(from_addr) > 50:
+                    from_addr = from_addr[:47] + "..."
+                lines.append(f"  {i}. {subject}")
+                lines.append(f"     De: {from_addr} | {date_fmt}")
+            if len(esi_emails) > max_shown:
+                lines.append(f"  ... y {len(esi_emails) - max_shown} más")
+        
+        return "\n".join(lines)
+
+    def _build_html_ual(self, emails: List[Dict], max_shown: int) -> str:
+        # Separar UAL general y ESI
+        esi_emails = []
+        ual_general = []
+        for email in emails:
+            subject = email.get("subject", "").lower()
+            body = email.get("body", "").lower()
+            from_addr = email.get("from", "").lower()
+            is_esi = any(kw in subject or kw in body or kw in from_addr 
+                        for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"])
+            if is_esi:
+                esi_emails.append(email)
+            else:
+                ual_general.append(email)
+        
+        html_parts = []
+        
+        # UAL General (colapsable)
+        if ual_general:
+            shown = ual_general[:max_shown]
+            rows = ""
+            for i, email in enumerate(shown, 1):
+                subject = email.get("subject", "(sin asunto)")
+                from_addr = email.get("from", "(desconocido)")
+                date_str = email.get("date", "")
+                try:
+                    if date_str:
+                        dt = parsedate_to_datetime(date_str)
+                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date_fmt = "Fecha desconocida"
+                except Exception:
+                    date_fmt = "Fecha inválida"
+                
+                rows += f"""
+                <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0;">
+                        <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{subject}</div>
+                        <div style="font-size: 12px; color: #666;">De: {from_addr}</div>
+                        <div style="font-size: 11px; color: #999;">{date_fmt}</div>
+                    </td>
+                </tr>"""
+            
+            more = ""
+            if len(ual_general) > max_shown:
+                more = f"<p style='color: #888; font-size: 12px; margin-top: 8px;'>... y {len(ual_general) - max_shown} más.</p>"
+            
+            html_parts.append(f"""
+            <details style="margin-bottom: 16px; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+                <summary style="background: linear-gradient(135deg, #0066cc 0%, #004499 100%); color: white; padding: 14px 16px; cursor: pointer; font-weight: 600; font-size: 15px;">
+                    📍 UAL General ({len(ual_general)} correos) ▼
+                </summary>
+                <div style="padding: 0;">
+                    <table style="width: 100%; border-collapse: collapse; margin: 0;">
+                        {rows}
+                    </table>
+                    {more}
+                </div>
+            </details>""")
+        
+        # ESI (colapsable)
+        if esi_emails:
+            shown = esi_emails[:max_shown]
+            rows = ""
+            for i, email in enumerate(shown, 1):
+                subject = email.get("subject", "(sin asunto)")
+                from_addr = email.get("from", "(desconocido)")
+                date_str = email.get("date", "")
+                try:
+                    if date_str:
+                        dt = parsedate_to_datetime(date_str)
+                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                    else:
+                        date_fmt = "Fecha desconocida"
+                except Exception:
+                    date_fmt = "Fecha inválida"
+                
+                rows += f"""
+                <tr>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
+                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0;">
+                        <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{subject}</div>
+                        <div style="font-size: 12px; color: #666;">De: {from_addr}</div>
+                        <div style="font-size: 11px; color: #999;">{date_fmt}</div>
+                    </td>
+                </tr>"""
+            
+            more = ""
+            if len(esi_emails) > max_shown:
+                more = f"<p style='color: #888; font-size: 12px; margin-top: 8px;'>... y {len(esi_emails) - max_shown} más.</p>"
+            
+            html_parts.append(f"""
+            <details style="margin-bottom: 16px; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
+                <summary style="background: linear-gradient(135deg, #009933 0%, #006622 100%); color: white; padding: 14px 16px; cursor: pointer; font-weight: 600; font-size: 15px;">
+                    🏗️ ESI - Escuela Superior de Ingeniería ({len(esi_emails)} correos) ▼
+                </summary>
+                <div style="padding: 0;">
+                    <table style="width: 100%; border-collapse: collapse; margin: 0;">
+                        {rows}
+                    </table>
+                    {more}
+                </div>
+            </details>""")
+        
+        if not html_parts:
+            return "<p style='color: green;'>✅ No hay correos UAL/ESI.</p>"
+        
+        return f"""
+        <h2 style="color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px;">🏫 UAL / ESI (click para expandir)</h2>
+        {''.join(html_parts)}
+"""
+
     def _build_text_footer(self) -> str:
         return """
 ═══════════════════════════════════════════════════════════
@@ -302,6 +493,7 @@ https://github.com/tu-usuario/email-cleaner-bot
         stats = digest["stats"]
         unreplied_count = digest.get("unreplied_count", 0)
         pending_count = digest.get("pending_review_count", 0)
+        ual_count = digest.get("ual_count", 0)
 
         lines = [
             f"📧 *Resumen Diario - {datetime.now().strftime('%d/%m/%Y')}*",
@@ -309,8 +501,10 @@ https://github.com/tu-usuario/email-cleaner-bot
             "📊 *Estadísticas:*",
             f"  📰 Newsletters: {stats.get('newsletters_labeled', 0)} etiquetadas, {stats.get('newsletters_archived', 0)} archivadas",
             f"  🧾 Recibos: {stats.get('receipts_labeled', 0)} etiquetados, {stats.get('receipts_archived', 0)} archivados",
+            f"  🏫 UAL/ESI: {stats.get('ual_labeled', 0)} UAL, {stats.get('esi_labeled', 0)} ESI",
             f"  ⏳ Pendientes revisión: {stats.get('pending_review', 0)}",
             f"  🛡️ Protegidos: {stats.get('protected_skipped', 0)}",
+            f"  🗑️ Duplicados eliminados: {stats.get('duplicates_deleted', 0)}",
         ]
 
         if stats.get('errors', 0):
@@ -335,5 +529,22 @@ https://github.com/tu-usuario/email-cleaner-bot
                 lines.append(f"  {i}. {subject}")
             if pending_count > 5:
                 lines.append(f"  ... y {pending_count - 5} más")
+
+        if ual_count > 0:
+            lines.append("")
+            lines.append(f"🏫 *{ual_count} correos UAL/ESI:*")
+            # Separar UAL y ESI
+            ual_emails = digest.get("ual_emails", [])
+            esi_count = sum(1 for e in ual_emails 
+                           if any(kw in e.get("subject", "").lower() or kw in e.get("body", "").lower() 
+                                 for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"]))
+            ual_general_count = ual_count - esi_count
+            lines.append(f"  📍 UAL General: {ual_general_count}")
+            lines.append(f"  🏗️ ESI: {esi_count}")
+            for i, email in enumerate(ual_emails[:5], 1):
+                subject = email.get("subject", "(sin asunto)")[:60]
+                lines.append(f"  {i}. {subject}")
+            if ual_count > 5:
+                lines.append(f"  ... y {ual_count - 5} más")
 
         return "\n".join(lines)

@@ -67,6 +67,19 @@ def main() -> int:
         logger.info("Clasificando correos...")
         classification_results = classifier.classify_batch(emails)
 
+        # Detectar y eliminar duplicados promocionales
+        if classifier.dup_enabled:
+            logger.info("Detectando duplicados promocionales...")
+            duplicates = classifier.find_duplicates(emails)
+            if duplicates:
+                logger.info(f"Eliminando {len(duplicates)} duplicados promocionales...")
+                duplicate_ids = [d["id"] for d in duplicates]
+                deleted = mail_client.delete_emails(duplicate_ids)
+                action_results["duplicates_deleted"] = deleted
+                logger.info(f"Duplicados eliminados: {deleted}")
+                # Remover duplicados de la lista de emails para no procesarlos
+                emails = [e for e in emails if e["id"] not in duplicate_ids]
+
         # Aplicar acciones (etiquetar, archivar)
         logger.info("Aplicando acciones...")
         action_results = mail_client.apply_actions(classification_results)
@@ -78,7 +91,7 @@ def main() -> int:
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
-        # Filtrar correos pendientes de revisión (etiquetados como newsletter/receipt pero no archivados)
+        # Filtrar correos pendientes de revisión
         pending_review_emails = [
             email for email in emails
             if email.get("id") not in processed_ids
@@ -86,12 +99,21 @@ def main() -> int:
                     for r in classification_results)
         ]
 
+        # Filtrar correos UAL/ESI para sección especial en digest
+        ual_emails = [
+            email for email in emails
+            if email.get("id") not in processed_ids
+            and any(r["email"]["id"] == email["id"] and r.get("category") in ("ual", "esi")
+                    for r in classification_results)
+        ]
+
         # Construir y enviar resumen (siempre enviar si hay algo que reportar)
-        if unreplied_emails or pending_review_emails:
-            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(pending_review_emails)} pendientes revisión...")
+        if unreplied_emails or pending_review_emails or ual_emails:
+            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(pending_review_emails)} pendientes revisión, {len(ual_emails)} UAL/ESI...")
             digest = digest_builder.build_digest(
                 unreplied_emails=unreplied_emails,
                 pending_review_emails=pending_review_emails,
+                ual_emails=ual_emails,
                 stats=action_results,
                 threshold_days=DAYS_THRESHOLD
             )
@@ -100,11 +122,12 @@ def main() -> int:
             # Actualizar IDs procesados
             new_processed_ids = {email["id"] for email in unreplied_emails}
             new_processed_ids.update(email["id"] for email in pending_review_emails)
+            new_processed_ids.update(email["id"] for email in ual_emails)
             processed_ids.update(new_processed_ids)
             save_processed_ids(processed_ids)
             logger.info(f"IDs procesados actualizados: {len(processed_ids)} total")
         else:
-            logger.info("No hay correos sin responder ni pendientes de revisión para notificar")
+            logger.info("No hay correos sin responder, pendientes de revisión ni UAL/ESI para notificar")
 
         # Cerrar conexión
         mail_client.disconnect()
