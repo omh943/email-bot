@@ -296,8 +296,8 @@ class MailClient:
             "raw_headers": dict(msg.items())
         }
 
-    def apply_actions(self, classification_results: List[Dict]) -> Dict[str, int]:
-        """Aplica acciones de etiquetado y archivado"""
+    def apply_actions(self, classification_results: List[Dict], all_emails: List[Dict] = None, classifier=None) -> Dict[str, int]:
+        """Aplica acciones de etiquetado, archivado y auto-eliminación de promos"""
         stats = {
             "newsletters_labeled": 0,
             "newsletters_archived": 0,
@@ -308,8 +308,21 @@ class MailClient:
             "pending_review": 0,
             "protected_skipped": 0,
             "duplicates_deleted": 0,
+            "promos_deleted": 0,
             "errors": 0
         }
+
+        # Auto-eliminar correos promocionales de organizaciones
+        if classifier and all_emails:
+            logger.info("Detectando correos promocionales de organizaciones para eliminar...")
+            promos_to_delete = classifier.find_promos_to_delete(all_emails)
+            if promos_to_delete:
+                promo_ids = [p["id"] for p in promos_to_delete]
+                deleted = self.delete_emails(promo_ids)
+                stats["promos_deleted"] = deleted
+                logger.info(f"Promocionales de organizaciones eliminados: {deleted}")
+                # Remover de la lista para no procesarlos
+                all_emails = [e for e in all_emails if e["id"] not in promo_ids]
 
         for result in classification_results:
             email_id = result["email"]["id"]

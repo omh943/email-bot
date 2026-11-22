@@ -67,7 +67,7 @@ def main() -> int:
         logger.info("Clasificando correos...")
         classification_results = classifier.classify_batch(emails)
 
-        # Inicializar stats para duplicados
+        # Inicializar stats
         action_results = {
             "newsletters_labeled": 0,
             "newsletters_archived": 0,
@@ -78,6 +78,7 @@ def main() -> int:
             "pending_review": 0,
             "protected_skipped": 0,
             "duplicates_deleted": 0,
+            "promos_deleted": 0,
             "errors": 0
         }
 
@@ -91,12 +92,11 @@ def main() -> int:
                 deleted = mail_client.delete_emails(duplicate_ids)
                 action_results["duplicates_deleted"] = deleted
                 logger.info(f"Duplicados eliminados: {deleted}")
-                # Remover duplicados de la lista de emails para no procesarlos
                 emails = [e for e in emails if e["id"] not in duplicate_ids]
 
-        # Aplicar acciones (etiquetar, archivar)
+        # Aplicar acciones (etiquetar, archivar, auto-eliminar promos)
         logger.info("Aplicando acciones...")
-        action_results = mail_client.apply_actions(classification_results)
+        action_results = mail_client.apply_actions(classification_results, emails, classifier)
 
         # Filtrar correos sin responder para el resumen
         unreplied_emails = [

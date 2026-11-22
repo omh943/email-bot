@@ -19,6 +19,47 @@ class DigestBuilder:
         self.max_unreplied = self.digest_config.get("max_unreplied_shown", 20)
         self.format = self.digest_config.get("format", "html")
 
+    @staticmethod
+    def _gmail_link(email_id: str, thread_id: str = None) -> str:
+        """Genera link directo al correo en Gmail Web"""
+        # Formato: https://mail.google.com/mail/u/0/#inbox/{message_id}
+        # O por thread: https://mail.google.com/mail/u/0/#inbox/{thread_id}
+        if thread_id and thread_id != email_id:
+            return f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
+        return f"https://mail.google.com/mail/u/0/#inbox/{email_id}"
+
+    def _email_row_html(self, i: int, email: Dict, show_gmail_link: bool = True) -> str:
+        """Genera fila HTML para un correo con link a Gmail"""
+        subject = email.get("subject", "(sin asunto)")
+        from_addr = email.get("from", "(desconocido)")
+        date_str = email.get("date", "")
+        email_id = email.get("id", "")
+        thread_id = email.get("thread_id", "")
+
+        try:
+            if date_str:
+                dt = parsedate_to_datetime(date_str)
+                date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+            else:
+                date_fmt = "Fecha desconocida"
+        except Exception:
+            date_fmt = "Fecha inválida"
+
+        gmail_url = self._gmail_link(email_id, thread_id) if show_gmail_link else "#"
+        link_attr = f'href="{gmail_url}" target="_blank" style="color: #0066cc; text-decoration: none;"' if show_gmail_link else 'style="color: #333;"'
+
+        return f"""
+        <tr>
+            <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
+            <td style="padding: 12px; border-bottom: 1px solid #f0f0f0;">
+                <div style="font-weight: 600; color: #333; margin-bottom: 4px;">
+                    <a {link_attr}>{subject}</a>
+                </div>
+                <div style="font-size: 13px; color: #666;">De: {from_addr}</div>
+                <div style="font-size: 12px; color: #999;">{date_fmt}</div>
+            </td>
+        </tr>"""
+
     def build_digest(
         self,
         unreplied_emails: List[Dict],
@@ -188,31 +229,7 @@ class DigestBuilder:
 
     def _build_html_unreplied(self, emails: List[Dict], threshold_days: int) -> str:
         shown = emails[:self.max_unreplied]
-
-        rows = ""
-        for i, email in enumerate(shown, 1):
-            subject = email.get("subject", "(sin asunto)")
-            from_addr = email.get("from", "(desconocido)")
-            date_str = email.get("date", "")
-
-            try:
-                if date_str:
-                    dt = parsedate_to_datetime(date_str)
-                    date_fmt = dt.strftime("%d/%m/%Y %H:%M")
-                else:
-                    date_fmt = "Fecha desconocida"
-            except Exception:
-                date_fmt = "Fecha inválida"
-
-            rows += f"""
-            <tr>
-                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
-                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0;">
-                    <div style="font-weight: 600; color: #333; margin-bottom: 4px;">{subject}</div>
-                    <div style="font-size: 13px; color: #666;">De: {from_addr}</div>
-                    <div style="font-size: 12px; color: #999;">{date_fmt}</div>
-                </td>
-            </tr>"""
+        rows = "".join(self._email_row_html(i, email) for i, email in enumerate(shown, 1))
 
         more = ""
         if len(emails) > self.max_unreplied:
@@ -220,6 +237,7 @@ class DigestBuilder:
 
         return f"""
         <h2 style="color: #333; border-bottom: 2px solid #f59e0b; padding-bottom: 8px;">⏳ Correos Sin Responder (> {threshold_days} días)</h2>
+        <p style="font-size: 12px; color: #888; margin-bottom: 8px;">💡 Click en el asunto para abrir en Gmail</p>
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
             {rows}
         </table>
@@ -258,31 +276,7 @@ class DigestBuilder:
 
     def _build_html_pending_review(self, emails: List[Dict], max_shown: int) -> str:
         shown = emails[:max_shown]
-
-        rows = ""
-        for i, email in enumerate(shown, 1):
-            subject = email.get("subject", "(sin asunto)")
-            from_addr = email.get("from", "(desconocido)")
-            date_str = email.get("date", "")
-
-            try:
-                if date_str:
-                    dt = parsedate_to_datetime(date_str)
-                    date_fmt = dt.strftime("%d/%m/%Y %H:%M")
-                else:
-                    date_fmt = "Fecha desconocida"
-            except Exception:
-                date_fmt = "Fecha inválida"
-
-            rows += f"""
-            <tr>
-                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
-                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0;">
-                    <div style="font-weight: 600; color: #333; margin-bottom: 4px;">{subject}</div>
-                    <div style="font-size: 13px; color: #666;">De: {from_addr}</div>
-                    <div style="font-size: 12px; color: #999;">{date_fmt}</div>
-                </td>
-            </tr>"""
+        rows = "".join(self._email_row_html(i, email) for i, email in enumerate(shown, 1))
 
         more = ""
         if len(emails) > max_shown:
@@ -290,6 +284,7 @@ class DigestBuilder:
 
         return f"""
         <h2 style="color: #333; border-bottom: 2px solid #8b5cf6; padding-bottom: 8px;">⏳ Pendientes de Revisión (Newsletters/Recibos)</h2>
+        <p style="font-size: 12px; color: #888; margin-bottom: 8px;">💡 Click en el asunto para abrir en Gmail</p>
         <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
             {rows}
         </table>
@@ -379,30 +374,8 @@ class DigestBuilder:
         # UAL General (colapsable)
         if ual_general:
             shown = ual_general[:max_shown]
-            rows = ""
-            for i, email in enumerate(shown, 1):
-                subject = email.get("subject", "(sin asunto)")
-                from_addr = email.get("from", "(desconocido)")
-                date_str = email.get("date", "")
-                try:
-                    if date_str:
-                        dt = parsedate_to_datetime(date_str)
-                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
-                    else:
-                        date_fmt = "Fecha desconocida"
-                except Exception:
-                    date_fmt = "Fecha inválida"
-                
-                rows += f"""
-                <tr>
-                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0;">
-                        <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{subject}</div>
-                        <div style="font-size: 12px; color: #666;">De: {from_addr}</div>
-                        <div style="font-size: 11px; color: #999;">{date_fmt}</div>
-                    </td>
-                </tr>"""
-            
+            rows = "".join(self._email_row_html(i, email) for i, email in enumerate(shown, 1))
+
             more = ""
             if len(ual_general) > max_shown:
                 more = f"<p style='color: #888; font-size: 12px; margin-top: 8px;'>... y {len(ual_general) - max_shown} más.</p>"
@@ -412,7 +385,8 @@ class DigestBuilder:
                 <summary style="background: linear-gradient(135deg, #0066cc 0%, #004499 100%); color: white; padding: 14px 16px; cursor: pointer; font-weight: 600; font-size: 15px;">
                     📍 UAL General ({len(ual_general)} correos) ▼
                 </summary>
-                <div style="padding: 0;">
+                <div style="padding: 8px;">
+                    <p style="font-size: 12px; color: #888; margin: 0 0 8px 0;">💡 Click en el asunto para abrir en Gmail</p>
                     <table style="width: 100%; border-collapse: collapse; margin: 0;">
                         {rows}
                     </table>
@@ -423,30 +397,8 @@ class DigestBuilder:
         # ESI (colapsable)
         if esi_emails:
             shown = esi_emails[:max_shown]
-            rows = ""
-            for i, email in enumerate(shown, 1):
-                subject = email.get("subject", "(sin asunto)")
-                from_addr = email.get("from", "(desconocido)")
-                date_str = email.get("date", "")
-                try:
-                    if date_str:
-                        dt = parsedate_to_datetime(date_str)
-                        date_fmt = dt.strftime("%d/%m/%Y %H:%M")
-                    else:
-                        date_fmt = "Fecha desconocida"
-                except Exception:
-                    date_fmt = "Fecha inválida"
-                
-                rows += f"""
-                <tr>
-                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
-                    <td style="padding: 10px; border-bottom: 1px solid #f0f0f0;">
-                        <div style="font-weight: 600; color: #333; margin-bottom: 2px;">{subject}</div>
-                        <div style="font-size: 12px; color: #666;">De: {from_addr}</div>
-                        <div style="font-size: 11px; color: #999;">{date_fmt}</div>
-                    </td>
-                </tr>"""
-            
+            rows = "".join(self._email_row_html(i, email) for i, email in enumerate(shown, 1))
+
             more = ""
             if len(esi_emails) > max_shown:
                 more = f"<p style='color: #888; font-size: 12px; margin-top: 8px;'>... y {len(esi_emails) - max_shown} más.</p>"
@@ -456,7 +408,8 @@ class DigestBuilder:
                 <summary style="background: linear-gradient(135deg, #009933 0%, #006622 100%); color: white; padding: 14px 16px; cursor: pointer; font-weight: 600; font-size: 15px;">
                     🏗️ ESI - Escuela Superior de Ingeniería ({len(esi_emails)} correos) ▼
                 </summary>
-                <div style="padding: 0;">
+                <div style="padding: 8px;">
+                    <p style="font-size: 12px; color: #888; margin: 0 0 8px 0;">💡 Click en el asunto para abrir en Gmail</p>
                     <table style="width: 100%; border-collapse: collapse; margin: 0;">
                         {rows}
                     </table>
@@ -468,7 +421,7 @@ class DigestBuilder:
             return "<p style='color: green;'>✅ No hay correos UAL/ESI.</p>"
         
         return f"""
-        <h2 style="color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px;">🏫 UAL / ESI (click para expandir)</h2>
+        <h2 style="color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px;">🏫 UAL / ESI (click para expandir, click en asunto para abrir en Gmail)</h2>
         {''.join(html_parts)}
 """
 

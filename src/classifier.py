@@ -84,6 +84,14 @@ class EmailClassifier:
         self.dup_threshold = dup_config.get("similarity_threshold", 0.85)
         self.dup_check_days = dup_config.get("check_days_back", 7)
         self.dup_promo_senders = dup_config.get("promo_senders", [])
+        
+        # Auto-delete promotional emails from organizations
+        auto_del_config = self.rules.get("auto_delete_promos", {})
+        self.auto_del_enabled = auto_del_config.get("enabled", False)
+        self.auto_del_promo_senders = [s.lower() for s in auto_del_config.get("promo_senders", [])]
+        self.auto_del_promo_domains = [d.lower() for d in auto_del_config.get("promo_domains", [])]
+        self.auto_del_promo_keywords = [k.lower() for k in auto_del_config.get("promo_keywords_subject", [])]
+        self.auto_del_protect_domains = [d.lower() for d in auto_del_config.get("protect_personal_domains", [])]
 
     def classify_batch(self, emails: List[Dict]) -> List[Dict]:
         """Clasifica un lote de correos"""
@@ -403,4 +411,54 @@ class EmailClassifier:
                 seen_subjects.append(subject)
         
         logger.info(f"Duplicados promocionales detectados: {len(to_delete)}")
+        return to_delete
+
+    def find_promos_to_delete(self, emails: List[Dict]) -> List[Dict]:
+        """
+        Detecta TODOS los correos promocionales de organizaciones para eliminar.
+        NO elimina emails de dominios personales protegidos (gmail.com, outlook.com, etc.)
+        """
+        if not self.auto_del_enabled:
+            return []
+        
+        to_delete = []
+        
+        for email in emails:
+            from_addr = email.get("from", "").lower()
+            subject = email.get("subject", "").lower()
+            
+            # PROTECCIÓN: Si es dominio personal, NUNCA eliminar
+            is_protected_domain = any(
+                protected_domain in from_addr 
+                for protected_domain in self.auto_del_protect_domains
+            )
+            if is_protected_domain:
+                continue
+            
+            # Verificar remitente promocional conocido
+            is_promo_sender = any(
+                promo_sender in from_addr 
+                for promo_sender in self.auto_del_promo_senders
+            )
+            
+            # Verificar dominio promocional (ej: mail.empresa.com, newsletter.tienda.com)
+            is_promo_domain = any(
+                promo_domain in from_addr 
+                for promo_domain in self.auto_del_promo_domains
+            )
+            
+            # Verificar palabras clave promocionales en asunto
+            is_promo_keyword = any(
+                kw in subject 
+                for kw in self.auto_del_promo_keywords
+            )
+            
+            # Si coincide con cualquiera de los criterios promocionales -> eliminar
+            if is_promo_sender or is_promo_domain or is_promo_keyword:
+                # Doble verificación: no eliminar si tiene palabras protegidas
+                if not self._is_protected(subject, from_addr, email.get("body", "").lower()):
+                    to_delete.append(email)
+                    logger.debug(f"Promocional detectado para eliminar: {subject[:50]} de {from_addr}")
+        
+        logger.info(f"Correos promocionales de organizaciones para eliminar: {len(to_delete)}")
         return to_delete
