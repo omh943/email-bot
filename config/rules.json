@@ -218,6 +218,8 @@
     "enabled": true,
     "domains": [
       "ual.es",
+      "inlumine.ual.es",
+      "inlumine.es",
       "gmail.ual.es",
       "correo.ual.es",
       "estudiantes.ual.es",
@@ -247,6 +249,16 @@
       "sacu.ual.es",
       "sicu.ual.es",
       "sau.ual.es"
+    ],
+    "exact_senders": [
+      "@inlumine.ual.es",
+      "@inlumine.es",
+      "@ual.es",
+      "@gmail.ual.es",
+      "@correo.ual.es",
+      "@estudiantes.ual.es",
+      "@alumno.ual.es",
+      "@profesor.ual.es"
     ],
     "esi_keywords": [
       "esi",

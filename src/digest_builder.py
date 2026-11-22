@@ -21,12 +21,12 @@ class DigestBuilder:
 
     @staticmethod
     def _gmail_link(email_id: str, thread_id: str = None) -> str:
-        """Genera link directo al correo en Gmail Web"""
-        # Formato: https://mail.google.com/mail/u/0/#inbox/{message_id}
-        # O por thread: https://mail.google.com/mail/u/0/#inbox/{thread_id}
-        if thread_id and thread_id != email_id:
-            return f"https://mail.google.com/mail/u/0/#inbox/{thread_id}"
-        return f"https://mail.google.com/mail/u/0/#inbox/{email_id}"
+        """Genera link directo al correo en Gmail Web usando búsqueda por Message-ID"""
+        # Formato correcto que SIEMPRE funciona: búsqueda por rfc822msgid
+        # https://mail.google.com/mail/u/0/#search/rfc822msgid:{message_id}
+        # El message_id suele venir con < >, hay que limpiarlo
+        clean_id = email_id.strip("<>")
+        return f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{clean_id}"
 
     def _email_row_html(self, i: int, email: Dict, show_gmail_link: bool = True) -> str:
         """Genera fila HTML para un correo con link a Gmail"""

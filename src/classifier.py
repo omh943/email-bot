@@ -74,6 +74,7 @@ class EmailClassifier:
         ual_config = self.rules.get("ual_filters", {})
         self.ual_enabled = ual_config.get("enabled", False)
         self.ual_domains = [d.lower() for d in ual_config.get("domains", [])]
+        self.ual_exact_senders = [s.lower() for s in ual_config.get("exact_senders", [])]
         self.esi_keywords = [k.lower() for k in ual_config.get("esi_keywords", [])]
         self.ual_label_prefix = ual_config.get("label_prefix", "UAL/")
         
@@ -156,14 +157,21 @@ class EmailClassifier:
         return "other", [], 0.0
 
     def _classify_ual(self, subject: str, from_addr: str, body: str) -> Optional[str]:
-        """Clasifica correos de UAL/ESI"""
+        """Clasifica correos de UAL/ESI con prioridad a remitentes exactos"""
         if not self.ual_enabled:
             return None
             
-        # Verificar dominio UAL
+        # 1. Verificar remitentes exactos (@inlumine.ual.es, @ual.es, etc.) - MÁXIMA PRIORIDAD
+        is_exact_ual = any(sender in from_addr for sender in self.ual_exact_senders)
+        if is_exact_ual:
+            # Verificar si es ESI dentro de los exactos
+            is_esi = any(kw in subject or kw in body for kw in self.esi_keywords)
+            return "esi" if is_esi else "ual"
+        
+        # 2. Verificar dominio UAL general
         is_ual_domain = any(domain in from_addr for domain in self.ual_domains)
         
-        # Verificar palabras clave ESI
+        # 3. Verificar palabras clave ESI
         is_esi = any(kw in subject or kw in body for kw in self.esi_keywords)
         
         if is_ual_domain or is_esi:
