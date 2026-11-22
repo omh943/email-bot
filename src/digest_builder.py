@@ -292,16 +292,12 @@ class DigestBuilder:
 """
 
     def _build_text_ual(self, emails: List[Dict], max_shown: int) -> str:
-        # Separar UAL general y ESI
+        # Separar UAL general y ESI usando la categoría asignada por el clasificador
         esi_emails = []
         ual_general = []
         for email in emails:
-            subject = email.get("subject", "").lower()
-            body = email.get("body", "").lower()
-            from_addr = email.get("from", "").lower()
-            is_esi = any(kw in subject or kw in body or kw in from_addr 
-                        for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"])
-            if is_esi:
+            category = email.get("category", "")
+            if category == "esi":
                 esi_emails.append(email)
             else:
                 ual_general.append(email)
@@ -355,16 +351,12 @@ class DigestBuilder:
         return "\n".join(lines)
 
     def _build_html_ual(self, emails: List[Dict], max_shown: int) -> str:
-        # Separar UAL general y ESI
+        # Separar UAL general y ESI usando la categoría asignada por el clasificador
         esi_emails = []
         ual_general = []
         for email in emails:
-            subject = email.get("subject", "").lower()
-            body = email.get("body", "").lower()
-            from_addr = email.get("from", "").lower()
-            is_esi = any(kw in subject or kw in body or kw in from_addr 
-                        for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"])
-            if is_esi:
+            category = email.get("category", "")
+            if category == "esi":
                 esi_emails.append(email)
             else:
                 ual_general.append(email)
@@ -486,11 +478,9 @@ https://github.com/tu-usuario/email-cleaner-bot
         if ual_count > 0:
             lines.append("")
             lines.append(f"🏫 *{ual_count} correos UAL/ESI:*")
-            # Separar UAL y ESI
+            # Separar UAL y ESI por categoría del clasificador
             ual_emails = digest.get("ual_emails", [])
-            esi_count = sum(1 for e in ual_emails 
-                           if any(kw in e.get("subject", "").lower() or kw in e.get("body", "").lower() 
-                                 for kw in ["esi", "escuela superior de ingeniería", "escuela de ingeniería"]))
+            esi_count = sum(1 for e in ual_emails if e.get("category") == "esi")
             ual_general_count = ual_count - esi_count
             lines.append(f"  📍 UAL General: {ual_general_count}")
             lines.append(f"  🏗️ ESI: {esi_count}")

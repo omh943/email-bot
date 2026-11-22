@@ -289,12 +289,14 @@ class TelegramChatBot:
         sys.exit(0)
     
     def send_message(self, text: str, parse_mode: str = "Markdown", 
-                     reply_markup: Dict = None, disable_preview: bool = True) -> bool:
+                     reply_markup: Dict = None, disable_preview: bool = True,
+                     chat_id: str = None) -> bool:
         """Envía mensaje con reintentos"""
+        target_chat_id = chat_id or self.config.chat_id
         for attempt in range(self.config.max_retries):
             try:
                 payload = {
-                    "chat_id": self.config.chat_id,
+                    "chat_id": target_chat_id,
                     "text": text[:4096],  # Límite Telegram
                     "parse_mode": parse_mode,
                     "disable_web_page_preview": disable_preview
@@ -313,7 +315,7 @@ class TelegramChatBot:
                 logger.warning(f"Intento {attempt+1}/{self.config.max_retries} falló: {e}")
                 if attempt < self.config.max_retries - 1:
                     time.sleep(2 ** attempt)  # Backoff exponencial
-        logger.error(f"Falló envío tras {self.config.max_retries} intentos")
+        logger.error(f"Fallo envío tras {self.config.max_retries} intentos")
         return False
     
     def send_typing(self):
@@ -763,7 +765,7 @@ class TelegramChatBot:
             return
         
         self.running = True
-        logger.info("🤖 Telegram ChatBot 24/7 iniciado (polling)")
+        logger.info("[BOT] Telegram ChatBot 24/7 iniciado (polling)")
         
         self.send_message(
             "🤖 *Email Cleaner Bot 24/7 ACTIVO*\n\n"
@@ -788,7 +790,7 @@ class TelegramChatBot:
     def stop(self):
         """Detiene el bot gracefully"""
         self.running = False
-        logger.info("🛑 Bot detenido")
+        logger.info("[STOP] Bot detenido")
         self.send_message("🛑 Bot detenido. Hasta pronto! 👋")
 
 

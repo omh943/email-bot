@@ -59,10 +59,6 @@ def main() -> int:
             db = DatabaseManager(str(db_path))
             logger.info("Base de datos chatbot inicializada")
 
-        # Validar configuración
-        validate_config()
-        logger.info("Configuración validada correctamente")
-
         # Cargar reglas y IDs procesados
         rules = load_rules()
         processed_ids = load_processed_ids()
@@ -124,6 +120,12 @@ def main() -> int:
                 action_results["duplicates_deleted"] = deleted
                 logger.info(f"Duplicados eliminados: {deleted}")
                 emails = [e for e in emails if e["id"] not in duplicate_ids]
+
+        # Filtrar classification_results para quitar emails ya borrados como duplicados
+        classification_results = [
+            r for r in classification_results
+            if r["email"]["id"] not in duplicate_ids
+        ] if duplicates else classification_results
 
         # Aplicar acciones (etiquetar, archivar, auto-eliminar promos)
         logger.info("Aplicando acciones...")
