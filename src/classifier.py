@@ -157,26 +157,21 @@ class EmailClassifier:
         return "other", [], 0.0
 
     def _classify_ual(self, subject: str, from_addr: str, body: str) -> Optional[str]:
-        """Clasifica correos de UAL/ESI con prioridad a remitentes exactos"""
+        """Clasifica correos de UAL/ESI - SOLO remitentes exactos"""
         if not self.ual_enabled:
             return None
             
-        # 1. Verificar remitentes exactos (@inlumine.ual.es, @ual.es, etc.) - MÁXIMA PRIORIDAD
+        # 1. Verificar remitentes exactos (@inlumine.ual.es, @ual.es, @esi@ual.es) - MÁXIMA PRIORIDAD
         is_exact_ual = any(sender in from_addr for sender in self.ual_exact_senders)
         if is_exact_ual:
-            # Verificar si es ESI dentro de los exactos
-            is_esi = any(kw in subject or kw in body for kw in self.esi_keywords)
+            # Solo @esi@ual.es es ESI, el resto UAL
+            is_esi = "@esi@ual.es" in from_addr
             return "esi" if is_esi else "ual"
         
         # 2. Verificar dominio UAL general
         is_ual_domain = any(domain in from_addr for domain in self.ual_domains)
         
-        # 3. Verificar palabras clave ESI
-        is_esi = any(kw in subject or kw in body for kw in self.esi_keywords)
-        
-        if is_ual_domain or is_esi:
-            if is_esi:
-                return "esi"
+        if is_ual_domain:
             return "ual"
         
         return None
