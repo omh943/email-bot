@@ -24,11 +24,13 @@ try:
 except ImportError:
     GMAIL_API_AVAILABLE = False
 
+import requests
 from config.settings import (
     GMAIL_SCOPES, GMAIL_CREDENTIALS_FILE, GMAIL_TOKEN_FILE,
     GMAIL_CREDENTIALS_JSON, GMAIL_TOKEN_JSON,
     EMAIL_USER, EMAIL_APP_PASSWORD,
-    IMAP_SERVER, IMAP_PORT, USE_IMAP
+    IMAP_SERVER, IMAP_PORT, USE_IMAP,
+    TELEGRAM_WEBHOOK
 )
 
 logger = logging.getLogger(__name__)
@@ -37,11 +39,12 @@ logger = logging.getLogger(__name__)
 class MailClient:
     """Cliente unificado para Gmail API e IMAP"""
 
-    def __init__(self):
+    def __init__(self, rules: Dict = None):
         self.service = None
         self.imap_conn = None
         self.labels_cache = {}
         self._use_gmail_api = not USE_IMAP and GMAIL_API_AVAILABLE
+        self._rules = rules or {}
 
     def connect(self) -> None:
         """Establece conexión con el servidor de correo"""
@@ -278,6 +281,8 @@ class MailClient:
             "newsletters_archived": 0,
             "receipts_labeled": 0,
             "receipts_archived": 0,
+            "pending_review": 0,
+            "protected_skipped": 0,
             "errors": 0
         }
 
@@ -287,6 +292,11 @@ class MailClient:
             actions = result.get("actions", [])
 
             try:
+                if category == "protected":
+                    stats["protected_skipped"] += 1
+                    logger.debug(f"Correo protegido omitido: {email_id}")
+                    continue
+                    
                 if self._use_gmail_api:
                     self._apply_actions_gmail(email_id, category, actions)
                 else:
@@ -301,6 +311,8 @@ class MailClient:
                     stats["receipts_labeled"] += 1
                 if "archive" in actions and category == "receipt":
                     stats["receipts_archived"] += 1
+                if "label_pending_review" in actions:
+                    stats["pending_review"] += 1
 
             except Exception as e:
                 logger.error(f"Error aplicando acciones a {email_id}: {e}")
@@ -325,6 +337,10 @@ class MailClient:
             if "archive" in actions:
                 remove_label_ids.append("INBOX")
 
+        # Etiqueta de revisión pendiente (para ambos tipos)
+        if "label_pending_review" in actions:
+            label_ids.append(self._get_or_create_label("Pending_Review"))
+
         if label_ids or remove_label_ids:
             self.service.users().messages().modify(
                 userId="me",
@@ -348,18 +364,79 @@ class MailClient:
             self.imap_conn.copy(email_id, folder)
             self.imap_conn.store(email_id, "+FLAGS", "\\Deleted")
 
+        # Carpeta de revisión pendiente
+        if "label_pending_review" in actions:
+            folder = "INBOX/Pending_Review"
+            self.imap_conn.create(folder)
+            self.imap_conn.copy(email_id, folder)
+            # No eliminar de INBOX en modo confirmación, solo copiar
+
         # Expulsar eliminados
         self.imap_conn.expunge()
 
     def send_digest(self, digest: Dict[str, Any]) -> bool:
-        """Envía el resumen por correo"""
+        """Envía el resumen por correo y Telegram"""
+        email_sent = False
+        telegram_sent = False
+        
+        # Enviar por email
         try:
             if self._use_gmail_api:
-                return self._send_digest_gmail(digest)
+                email_sent = self._send_digest_gmail(digest)
             else:
-                return self._send_digest_imap(digest)
+                email_sent = self._send_digest_imap(digest)
         except Exception as e:
-            logger.error(f"Error enviando resumen: {e}")
+            logger.error(f"Error enviando resumen por email: {e}")
+        
+        # Enviar por Telegram si hay webhook configurado
+        if TELEGRAM_WEBHOOK:
+            try:
+                telegram_sent = self._send_digest_telegram(digest)
+            except Exception as e:
+                logger.error(f"Error enviando resumen por Telegram: {e}")
+        
+        return email_sent or telegram_sent
+    
+    def _send_digest_telegram(self, digest: Dict) -> bool:
+        """Envía resumen via Telegram Bot API"""
+        import requests
+        from src.digest_builder import DigestBuilder
+        
+        if not TELEGRAM_WEBHOOK:
+            return False
+            
+        # Usar el builder para crear mensaje en formato Markdown
+        builder = DigestBuilder(self._rules)
+        message = builder.build_telegram_message(digest)
+        
+        # Extraer token y chat_id del webhook
+        # Formato: https://api.telegram.org/bot<TOKEN>/sendMessage?chat_id=<CHAT_ID>
+        try:
+            webhook_url = TELEGRAM_WEBHOOK
+            # Extraer token
+            token_part = webhook_url.split("/bot")[1].split("/")[0]
+            # Extraer chat_id
+            chat_id = webhook_url.split("chat_id=")[1].split("&")[0] if "chat_id=" in webhook_url else None
+            
+            if not chat_id:
+                logger.warning("No se pudo extraer chat_id del webhook Telegram")
+                return False
+                
+            base_url = f"https://api.telegram.org/bot{token_part}"
+            payload = {
+                "chat_id": chat_id,
+                "text": message,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True
+            }
+            
+            response = requests.post(f"{base_url}/sendMessage", json=payload, timeout=10)
+            response.raise_for_status()
+            
+            logger.info("Resumen enviado via Telegram")
+            return True
+        except Exception as e:
+            logger.error(f"Error enviando a Telegram: {e}")
             return False
 
     def _send_digest_gmail(self, digest: Dict) -> bool:

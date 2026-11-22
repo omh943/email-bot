@@ -23,12 +23,16 @@ class DigestBuilder:
         self,
         unreplied_emails: List[Dict],
         stats: Dict[str, int],
-        threshold_days: int
+        threshold_days: int,
+        pending_review_emails: List[Dict] = None
     ) -> Dict[str, Any]:
         """
         Construye el resumen completo.
         Retorna dict con subject, text_body, html_body.
         """
+        if pending_review_emails is None:
+            pending_review_emails = []
+            
         date_str = datetime.now().strftime("%d/%m/%Y")
         subject = f"📧 Resumen diario de correo - {date_str}"
 
@@ -52,6 +56,15 @@ class DigestBuilder:
             text_parts.append("\n✅ No hay correos sin responder pendientes.")
             html_parts.append("<p style='color: green;'>✅ No hay correos sin responder pendientes.</p>")
 
+        # Correos pendientes de revisión
+        max_pending = self.digest_config.get("max_pending_review_shown", 30)
+        if pending_review_emails:
+            text_parts.append(self._build_text_pending_review(pending_review_emails, max_pending))
+            html_parts.append(self._build_html_pending_review(pending_review_emails, max_pending))
+        elif self.digest_config.get("include_pending_review_list", True):
+            text_parts.append("\n✅ No hay correos pendientes de revisión.")
+            html_parts.append("<p style='color: green;'>✅ No hay correos pendientes de revisión.</p>")
+
         # Pie
         text_parts.append(self._build_text_footer())
         html_parts.append(self._build_html_footer())
@@ -65,7 +78,8 @@ class DigestBuilder:
             "html_body": html_body,
             "generated_at": datetime.now().isoformat(),
             "stats": stats,
-            "unreplied_count": len(unreplied_emails)
+            "unreplied_count": len(unreplied_emails),
+            "pending_review_count": len(pending_review_emails)
         }
 
     def _build_text_header(self, date_str: str, stats: Dict, threshold_days: int) -> str:
@@ -92,6 +106,8 @@ class DigestBuilder:
         lines.append(f"  📦 Newsletters archivadas:     {stats.get('newsletters_archived', 0)}")
         lines.append(f"  🧾 Recibos etiquetados:        {stats.get('receipts_labeled', 0)}")
         lines.append(f"  📁 Recibos archivados:         {stats.get('receipts_archived', 0)}")
+        lines.append(f"  ⏳ Pendientes de revisión:       {stats.get('pending_review', 0)}")
+        lines.append(f"  🛡️ Protegidos (no tocados):      {stats.get('protected_skipped', 0)}")
         if stats.get('errors', 0):
             lines.append(f"  ⚠️ Errores:                    {stats.get('errors', 0)}")
         return "\n".join(lines)
@@ -102,6 +118,8 @@ class DigestBuilder:
             ("📦 Newsletters archivadas", stats.get('newsletters_archived', 0)),
             ("🧾 Recibos etiquetados", stats.get('receipts_labeled', 0)),
             ("📁 Recibos archivados", stats.get('receipts_archived', 0)),
+            ("⏳ Pendientes de revisión", stats.get('pending_review', 0)),
+            ("🛡️ Protegidos (no tocados)", stats.get('protected_skipped', 0)),
         ]
         if stats.get('errors', 0):
             items.append(("⚠️ Errores", stats.get('errors', 0)))
@@ -193,6 +211,76 @@ class DigestBuilder:
         {more}
 """
 
+    def _build_text_pending_review(self, emails: List[Dict], max_shown: int) -> str:
+        lines = [f"\n⏳ CORREOS PENDIENTES DE REVISIÓN (Newsletters/Recibos)", "─" * 40]
+        shown = emails[:max_shown]
+
+        for i, email in enumerate(shown, 1):
+            subject = email.get("subject", "(sin asunto)")
+            from_addr = email.get("from", "(desconocido)")
+            date_str = email.get("date", "")
+
+            try:
+                if date_str:
+                    dt = parsedate_to_datetime(date_str)
+                    date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                else:
+                    date_fmt = "Fecha desconocida"
+            except Exception:
+                date_fmt = "Fecha inválida"
+
+            if len(from_addr) > 50:
+                from_addr = from_addr[:47] + "..."
+
+            lines.append(f"\n{i}. {subject}")
+            lines.append(f"   De: {from_addr}")
+            lines.append(f"   Fecha: {date_fmt}")
+
+        if len(emails) > max_shown:
+            lines.append(f"\n... y {len(emails) - max_shown} correos más.")
+
+        return "\n".join(lines)
+
+    def _build_html_pending_review(self, emails: List[Dict], max_shown: int) -> str:
+        shown = emails[:max_shown]
+
+        rows = ""
+        for i, email in enumerate(shown, 1):
+            subject = email.get("subject", "(sin asunto)")
+            from_addr = email.get("from", "(desconocido)")
+            date_str = email.get("date", "")
+
+            try:
+                if date_str:
+                    dt = parsedate_to_datetime(date_str)
+                    date_fmt = dt.strftime("%d/%m/%Y %H:%M")
+                else:
+                    date_fmt = "Fecha desconocida"
+            except Exception:
+                date_fmt = "Fecha inválida"
+
+            rows += f"""
+            <tr>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0; width: 40px; text-align: center; color: #888;">{i}</td>
+                <td style="padding: 12px; border-bottom: 1px solid #f0f0f0;">
+                    <div style="font-weight: 600; color: #333; margin-bottom: 4px;">{subject}</div>
+                    <div style="font-size: 13px; color: #666;">De: {from_addr}</div>
+                    <div style="font-size: 12px; color: #999;">{date_fmt}</div>
+                </td>
+            </tr>"""
+
+        more = ""
+        if len(emails) > max_shown:
+            more = f"<p style='color: #888; font-size: 13px; margin-top: 12px;'>... y {len(emails) - max_shown} correos más.</p>"
+
+        return f"""
+        <h2 style="color: #333; border-bottom: 2px solid #8b5cf6; padding-bottom: 8px;">⏳ Pendientes de Revisión (Newsletters/Recibos)</h2>
+        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
+            {rows}
+        </table>
+        {more}
+"""
+
     def _build_text_footer(self) -> str:
         return """
 ═══════════════════════════════════════════════════════════
@@ -212,7 +300,8 @@ https://github.com/tu-usuario/email-cleaner-bot
     def build_telegram_message(self, digest: Dict) -> str:
         """Construye mensaje optimizado para Telegram (Markdown)"""
         stats = digest["stats"]
-        unreplied_count = digest["unreplied_count"]
+        unreplied_count = digest.get("unreplied_count", 0)
+        pending_count = digest.get("pending_review_count", 0)
 
         lines = [
             f"📧 *Resumen Diario - {datetime.now().strftime('%d/%m/%Y')}*",
@@ -220,6 +309,8 @@ https://github.com/tu-usuario/email-cleaner-bot
             "📊 *Estadísticas:*",
             f"  📰 Newsletters: {stats.get('newsletters_labeled', 0)} etiquetadas, {stats.get('newsletters_archived', 0)} archivadas",
             f"  🧾 Recibos: {stats.get('receipts_labeled', 0)} etiquetados, {stats.get('receipts_archived', 0)} archivados",
+            f"  ⏳ Pendientes revisión: {stats.get('pending_review', 0)}",
+            f"  🛡️ Protegidos: {stats.get('protected_skipped', 0)}",
         ]
 
         if stats.get('errors', 0):
@@ -235,5 +326,14 @@ https://github.com/tu-usuario/email-cleaner-bot
                 lines.append(f"  ... y {unreplied_count - 5} más")
         else:
             lines.append("✅ *No hay correos sin responder pendientes*")
+
+        if pending_count > 0:
+            lines.append("")
+            lines.append(f"📋 *{pending_count} pendientes de revisión:*")
+            for i, email in enumerate(digest.get("pending_review_emails", [])[:5], 1):
+                subject = email.get("subject", "(sin asunto)")[:60]
+                lines.append(f"  {i}. {subject}")
+            if pending_count > 5:
+                lines.append(f"  ... y {pending_count - 5} más")
 
         return "\n".join(lines)
