@@ -37,8 +37,8 @@ class DigestBuilder:
         html_parts = []
 
         # Encabezado
-        text_parts.append(self._build_text_header(date_str, stats, threshold_stats))
-        html_parts.append(self._build_html_header(date_str, stats, threshold_stats))
+        text_parts.append(self._build_text_header(date_str, stats, threshold_days))
+        html_parts.append(self._build_html_header(date_str, stats, threshold_days))
 
         # Estadísticas de limpieza
         text_parts.append(self._build_text_stats(stats))
