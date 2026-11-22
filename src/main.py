@@ -67,6 +67,20 @@ def main() -> int:
         logger.info("Clasificando correos...")
         classification_results = classifier.classify_batch(emails)
 
+        # Inicializar stats para duplicados
+        action_results = {
+            "newsletters_labeled": 0,
+            "newsletters_archived": 0,
+            "receipts_labeled": 0,
+            "receipts_archived": 0,
+            "ual_labeled": 0,
+            "esi_labeled": 0,
+            "pending_review": 0,
+            "protected_skipped": 0,
+            "duplicates_deleted": 0,
+            "errors": 0
+        }
+
         # Detectar y eliminar duplicados promocionales
         if classifier.dup_enabled:
             logger.info("Detectando duplicados promocionales...")
