@@ -1,0 +1,2 @@
+# Este archivo mantiene el directorio en Git
+# Los archivos reales (processed_ids.json) se generan en runtime y están en .gitignore

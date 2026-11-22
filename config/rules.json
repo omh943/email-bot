@@ -1,0 +1,136 @@
+{
+  "version": "1.0",
+  "description": "Reglas de clasificación y acción para el bot de limpieza de correo",
+  "newsletter_labels": [
+    "Newsletter",
+    "Boletín",
+    "Suscripción",
+    "Marketing",
+    "Promociones",
+    "Newsletter/Promos"
+  ],
+  "newsletter_senders": [
+    "noreply@",
+    "no-reply@",
+    "newsletter@",
+    "marketing@",
+    "promo@",
+    "offers@",
+    "deals@",
+    "updates@",
+    "notifications@",
+    "digest@",
+    "weekly@",
+    "daily@",
+    "monthly@"
+  ],
+  "newsletter_keywords_subject": [
+    "newsletter",
+    "boletín",
+    "suscripción",
+    "weekly digest",
+    "daily digest",
+    "monthly update",
+    "promoción",
+    "oferta exclusiva",
+    "descuento",
+    "sale",
+    "novedades",
+    "actualización"
+  ],
+  "newsletter_keywords_body": [
+    "darse de baja",
+    "unsubscribe",
+    "preferencias de correo",
+    "email preferences",
+    "política de privacidad",
+    "privacy policy",
+    "ver en el navegador",
+    "view in browser"
+  ],
+  "receipt_labels": [
+    "Recibo",
+    "Factura",
+    "Comprobante",
+    "Receipt",
+    "Invoice",
+    "Order Confirmation",
+    "Confirmación de pedido"
+  ],
+  "receipt_senders": [
+    "billing@",
+    "facturacion@",
+    "factura@",
+    "receipts@",
+    "invoices@",
+    "orders@",
+    "pedidos@",
+    "compras@",
+    "payments@",
+    "pagos@",
+    "noreply@paypal",
+    "noreply@stripe",
+    "noreply@amazon",
+    "noreply@mercadolibre",
+    "noreply@ebay",
+    "noreply@uber",
+    "noreply@airbnb",
+    "noreply@booking"
+  ],
+  "receipt_keywords_subject": [
+    "recibo",
+    "factura",
+    "comprobante",
+    "receipt",
+    "invoice",
+    "order confirmation",
+    "confirmación de pedido",
+    "confirmación de compra",
+    "pago confirmado",
+    "payment confirmed",
+    "tu pedido",
+    "your order"
+  ],
+  "receipt_keywords_body": [
+    "número de pedido",
+    "order number",
+    "número de factura",
+    "invoice number",
+    "total pagado",
+    "amount paid",
+    "detalles de facturación",
+    "billing details",
+    "método de pago",
+    "payment method"
+  ],
+  "unreplied_threshold_days": 3,
+  "unreplied_exclude_labels": [
+    "Newsletter",
+    "Recibo",
+    "Factura",
+    "Spam",
+    "Promociones",
+    "Social",
+    "Foros"
+  ],
+  "unreplied_exclude_senders": [
+    "noreply@",
+    "no-reply@",
+    "donotreply@",
+    "mailer-daemon@",
+    "postmaster@",
+    "bounce@"
+  ],
+  "actions": {
+    "newsletter": "label_and_archive",
+    "receipt": "label_and_archive",
+    "unreplied": "notify_only"
+  },
+  "digest": {
+    "include_newsletters_count": true,
+    "include_receipts_count": true,
+    "include_unreplied_list": true,
+    "max_unreplied_shown": 20,
+    "format": "html"
+  }
+}

@@ -1,0 +1,52 @@
+# ============================================
+# ARCHIVOS QUE NUNCA DEBEN SUBIRSE A GIT
+# ============================================
+
+# Variables de entorno y secretos
+.env
+.env.local
+.env.*.local
+
+# Credenciales Gmail API
+credentials.json
+token.json
+client_secret*.json
+
+# Datos de runtime (IDs procesados, caches)
+data/processed_ids.json
+data/*.json
+!data/.gitkeep
+
+# Logs
+logs/*.log
+logs/*.txt
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Distribución
+dist/
+build/
+*.egg-info/
