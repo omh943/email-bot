@@ -50,7 +50,7 @@ def main() -> int:
         logger.info(f"Reglas cargadas. IDs procesados previos: {len(processed_ids)}")
 
         # Inicializar componentes
-        mail_client = MailClient()
+        mail_client = MailClient(rules)
         classifier = EmailClassifier(rules)
         digest_builder = DigestBuilder(rules)
 
@@ -78,11 +78,20 @@ def main() -> int:
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
-        # Construir y enviar resumen
-        if unreplied_emails:
-            logger.info(f"Enviando resumen de {len(unreplied_emails)} correos sin responder...")
+        # Filtrar correos pendientes de revisión (etiquetados como newsletter/receipt pero no archivados)
+        pending_review_emails = [
+            email for email in emails
+            if email.get("id") not in processed_ids
+            and any(r["email"]["id"] == email["id"] and "label_pending_review" in r.get("actions", [])
+                    for r in classification_results)
+        ]
+
+        # Construir y enviar resumen (siempre enviar si hay algo que reportar)
+        if unreplied_emails or pending_review_emails:
+            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(pending_review_emails)} pendientes revisión...")
             digest = digest_builder.build_digest(
                 unreplied_emails=unreplied_emails,
+                pending_review_emails=pending_review_emails,
                 stats=action_results,
                 threshold_days=DAYS_THRESHOLD
             )
@@ -90,11 +99,12 @@ def main() -> int:
 
             # Actualizar IDs procesados
             new_processed_ids = {email["id"] for email in unreplied_emails}
+            new_processed_ids.update(email["id"] for email in pending_review_emails)
             processed_ids.update(new_processed_ids)
             save_processed_ids(processed_ids)
             logger.info(f"IDs procesados actualizados: {len(processed_ids)} total")
         else:
-            logger.info("No hay correos sin responder nuevos para notificar")
+            logger.info("No hay correos sin responder ni pendientes de revisión para notificar")
 
         # Cerrar conexión
         mail_client.disconnect()

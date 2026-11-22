@@ -33,6 +33,10 @@ class EmailClassifier:
             re.compile(re.escape(s).replace(r"\*", ".*") + r".*", re.IGNORECASE)
             for s in self.rules.get("unreplied_exclude_senders", [])
         ]
+        self.protected_sender_patterns = [
+            re.compile(re.escape(s).replace(r"\*", ".*") + r".*", re.IGNORECASE)
+            for s in self.rules.get("protected_senders", [])
+        ]
 
         # Palabras clave en asunto
         self.newsletter_subject_keywords = [
@@ -40,6 +44,9 @@ class EmailClassifier:
         ]
         self.receipt_subject_keywords = [
             k.lower() for k in self.rules.get("receipt_keywords_subject", [])
+        ]
+        self.protected_subject_keywords = [
+            k.lower() for k in self.rules.get("protected_keywords_subject", [])
         ]
 
         # Palabras clave en cuerpo
@@ -49,6 +56,9 @@ class EmailClassifier:
         self.receipt_body_keywords = [
             k.lower() for k in self.rules.get("receipt_keywords_body", [])
         ]
+        self.protected_body_keywords = [
+            k.lower() for k in self.rules.get("protected_keywords_body", [])
+        ]
 
         # Etiquetas conocidas
         self.newsletter_labels = set(l.lower() for l in self.rules.get("newsletter_labels", []))
@@ -56,6 +66,9 @@ class EmailClassifier:
         self.unreplied_exclude_labels = set(
             l.lower() for l in self.rules.get("unreplied_exclude_labels", [])
         )
+        
+        # Configuración de confirmación
+        self.confirmation_mode = self.rules.get("confirmation_mode", False)
 
     def classify_batch(self, emails: List[Dict]) -> List[Dict]:
         """Clasifica un lote de correos"""
@@ -82,12 +95,19 @@ class EmailClassifier:
         body = email.get("body", "").lower()
         labels = [l.lower() for l in email.get("labels", [])]
 
+        # Verificar si está protegido (no archivar nunca)
+        if self._is_protected(subject, from_addr, body):
+            logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
+            return "protected", [], 0.0
+
         # Verificar etiquetas existentes primero (más confiable)
         if any(l in self.newsletter_labels for l in labels):
-            return "newsletter", ["label_newsletter", "archive"], 0.95
+            actions = self._get_actions_for_category("newsletter")
+            return "newsletter", actions, 0.95
 
         if any(l in self.receipt_labels for l in labels):
-            return "receipt", ["label_receipt", "archive"], 0.95
+            actions = self._get_actions_for_category("receipt")
+            return "receipt", actions, 0.95
 
         # Puntuación para newsletter
         newsletter_score = self._score_newsletter(subject, from_addr, body)
@@ -96,18 +116,52 @@ class EmailClassifier:
 
         # Determinar categoría ganadora
         if newsletter_score > receipt_score and newsletter_score >= 0.5:
-            actions = ["label_newsletter"]
-            if self.rules.get("actions", {}).get("newsletter") == "label_and_archive":
-                actions.append("archive")
+            actions = self._get_actions_for_category("newsletter")
             return "newsletter", actions, newsletter_score
 
         if receipt_score > newsletter_score and receipt_score >= 0.5:
-            actions = ["label_receipt"]
-            if self.rules.get("actions", {}).get("receipt") == "label_and_archive":
-                actions.append("archive")
+            actions = self._get_actions_for_category("receipt")
             return "receipt", actions, receipt_score
 
         return "other", [], 0.0
+
+    def _is_protected(self, subject: str, from_addr: str, body: str) -> bool:
+        """Verifica si el correo tiene contenido protegido que no debe archivarse"""
+        # Verificar remitentes protegidos
+        for pattern in self.protected_sender_patterns:
+            if pattern.search(from_addr):
+                return True
+
+        # Verificar palabras clave protegidas en asunto
+        for kw in self.protected_subject_keywords:
+            if kw in subject:
+                return True
+
+        # Verificar palabras clave protegidas en cuerpo
+        for kw in self.protected_body_keywords:
+            if kw in body:
+                return True
+
+        return False
+
+    def _get_actions_for_category(self, category: str) -> List[str]:
+        """Obtiene acciones según la configuración y modo confirmación"""
+        action_config = self.rules.get("actions", {}).get(category, "label_and_archive")
+        
+        if category == "newsletter":
+            base_action = "label_newsletter"
+        elif category == "receipt":
+            base_action = "label_receipt"
+        else:
+            return []
+
+        if self.confirmation_mode:
+            # En modo confirmación: solo etiquetar para revisión manual
+            return [base_action, "label_pending_review"]
+        elif action_config == "label_and_archive":
+            return [base_action, "archive"]
+        else:
+            return [base_action]
 
     def _score_newsletter(self, subject: str, from_addr: str, body: str) -> float:
         """Calcula puntuación de probabilidad de ser newsletter"""
