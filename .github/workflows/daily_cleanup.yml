@@ -23,7 +23,8 @@ jobs:
           pip install -r requirements.txt
 
       - run: |
-          echo "EMAIL_USER=${{ secrets.EMAIL_USER }}" > .env
+          echo "USE_IMAP=true" > .env
+          echo "EMAIL_USER=${{ secrets.EMAIL_USER }}" >> .env
           echo "EMAIL_APP_PASSWORD=${{ secrets.EMAIL_APP_PASSWORD }}" >> .env
           echo "TELEGRAM_WEBHOOK=${{ secrets.TELEGRAM_WEBHOOK }}" >> .env
           echo "DAYS_THRESHOLD=${{ secrets.DAYS_THRESHOLD || '3' }}" >> .env
