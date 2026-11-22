@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  # Bot principal de limpieza (cron diario)
+  email-cleaner:
+    build: .
+    container_name: email-cleaner
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: >
+      sh -c "
+      echo '0 7 * * * cd /app && python -m src.main >> /app/logs/cron.log 2>&1' | crontab -
+      cron -f
+      "
+    restart: unless-stopped
+    depends_on:
+      - telegram-bot
+
+  # Chatbot Telegram 24/7
+  telegram-bot:
+    build: .
+    container_name: telegram-bot
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: python -m src.telegram_bot
+    restart: always
+    restart_policy:
+      condition: on-failure
+      delay: 10s
+      max_attempts: 5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sqlite3; sqlite3('/app/data/telegram_bot.db', 'SELECT 1')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Opcional: Redis para cache compartido (futuro)
+  # redis:
+  #   image: redis:7-alpine
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+
+volumes:
+  # redis_data:
+  data:
+  logs:
+
+networks:
+  default:
+    name: email-cleaner-network

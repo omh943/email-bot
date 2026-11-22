@@ -1,0 +1,26 @@
+[Unit]
+Description=Email Cleaner Telegram Chatbot 24/7
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/email-cleaner-bot
+Environment=PATH=/home/ubuntu/email-cleaner-bot/.venv/bin
+ExecStart=/home/ubuntu/email-cleaner-bot/.venv/bin/python -m src.telegram_bot
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=email-cleaner-telegram
+
+# Seguridad
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/ubuntu/email-cleaner-bot/data /home/ubuntu/email-cleaner-bot/logs
+
+[Install]
+WantedBy=multi-user.target

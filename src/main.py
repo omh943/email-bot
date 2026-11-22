@@ -12,11 +12,19 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import (
     validate_config, load_rules, load_processed_ids, save_processed_ids,
-    LOG_LEVEL, LOG_FILE, DAYS_THRESHOLD
+    LOG_LEVEL, LOG_FILE, DAYS_THRESHOLD, DATA_DIR
 )
 from src.mail_client import MailClient
 from src.classifier import EmailClassifier
 from src.digest_builder import DigestBuilder
+
+# Importar database manager para chatbot
+try:
+    from src.telegram_bot import DatabaseManager
+    DB_AVAILABLE = True
+except ImportError:
+    DB_AVAILABLE = False
+    DatabaseManager = None
 
 # Configurar logging
 LOGS_DIR = Path(__file__).parent.parent / "logs"
@@ -44,6 +52,17 @@ def main() -> int:
         validate_config()
         logger.info("Configuración validada correctamente")
 
+        # Inicializar base de datos para chatbot
+        db = None
+        if DB_AVAILABLE:
+            db_path = DATA_DIR / "telegram_bot.db"
+            db = DatabaseManager(str(db_path))
+            logger.info("Base de datos chatbot inicializada")
+
+        # Validar configuración
+        validate_config()
+        logger.info("Configuración validada correctamente")
+
         # Cargar reglas y IDs procesados
         rules = load_rules()
         processed_ids = load_processed_ids()
@@ -66,6 +85,18 @@ def main() -> int:
         # Clasificar correos
         logger.info("Clasificando correos...")
         classification_results = classifier.classify_batch(emails)
+
+        # Guardar emails en BD para chatbot
+        if db:
+            # Enriquecer emails con categoría y acciones
+            enriched_emails = []
+            for result in classification_results:
+                email = result["email"].copy()
+                email["category"] = result["category"]
+                email["actions"] = result.get("actions", [])
+                enriched_emails.append(email)
+            db.cache_emails(enriched_emails)
+            logger.info(f"Emails cacheados en BD: {len(enriched_emails)}")
 
         # Inicializar stats
         action_results = {
@@ -142,6 +173,15 @@ def main() -> int:
             logger.info(f"IDs procesados actualizados: {len(processed_ids)} total")
         else:
             logger.info("No hay correos sin responder, pendientes de revisión ni UAL/ESI para notificar")
+
+        # Guardar stats en BD para chatbot
+        if db:
+            action_results["generated_at"] = datetime.now().isoformat()
+            action_results["unreplied_count"] = len(unreplied_emails)
+            action_results["pending_review_count"] = len(pending_review_emails)
+            action_results["ual_count"] = len(ual_emails)
+            db.save_daily_stats(action_results)
+            logger.info("Stats diarias guardadas en BD")
 
         # Cerrar conexión
         mail_client.disconnect()
