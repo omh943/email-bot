@@ -27,8 +27,20 @@ class DigestBuilder:
         headers = email.get("raw_headers") or {}
         for key, value in headers.items():
             if str(key).lower() == "message-id" and value:
-                return str(value).strip().strip("<>")
-        return str(email.get("message_id", "") or "").strip().strip("<>")
+                raw = str(value)
+                # Limpiar: quitar espacios internos, saltos de línea, comillas y <>
+                cleaned = raw.replace("\n", " ").replace("\r", " ").replace('"', "").strip()
+                cleaned = cleaned.strip("<>").strip()
+                if cleaned:
+                    logger.debug(f"Message-ID extraído: '{cleaned}'")
+                    return cleaned
+
+        fallback = str(email.get("message_id", "") or "").strip().strip("<>").strip()
+        if fallback:
+            logger.debug(f"Message-ID de fallback: '{fallback}'")
+        else:
+            logger.debug("No se encontró Message-ID en el correo")
+        return fallback
 
     @classmethod
     def _gmail_link(cls, email: Dict) -> str:
@@ -41,6 +53,7 @@ class DigestBuilder:
         """
         msg_id = cls._message_id(email)
         if msg_id:
+            # Gmail espera el Message-ID sin <> y con rfc822msgid: como operador de búsqueda
             query = quote(f"rfc822msgid:{msg_id}", safe="")
             return f"https://mail.google.com/mail/u/0/#search/{query}"
 

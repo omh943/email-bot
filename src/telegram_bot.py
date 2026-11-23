@@ -452,21 +452,8 @@ class TelegramChatBot:
             self.send_message("📭 No se encontró el correo.", chat_id=chat_id)
             return
 
-        # DigestBuilder._message_id extrae el Message-ID real de raw_headers
-        msg_id = DigestBuilder._message_id(email)
-        if msg_id:
-            url = f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{msg_id}"
-        else:
-            # Fallback: búsqueda por remitente + asunto
-            subject = email.get("subject") or ""
-            sender = email.get("from") or email.get("from_addr") or ""
-            match = re.search(r"[\w.+-]+@[\w.-]+", sender)
-            parts = []
-            if match:
-                parts.append(f"from:{match.group(0)}")
-            if subject:
-                parts.append(f'subject:("{subject}")')
-            url = f"https://mail.google.com/mail/u/0/#search/{quote(' '.join(parts), safe='')}"
+        # Usar DigestBuilder._gmail_link para construir el enlace de forma consistente
+        url = DigestBuilder._gmail_link(email)
 
         self.send_message(
             f"📧 [Abrir en Gmail]({url})",
