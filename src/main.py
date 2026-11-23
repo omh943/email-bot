@@ -4,7 +4,7 @@ Conecta, lee, aplica reglas y envía el resumen.
 """
 import sys
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Añadir directorio raíz al path para imports
@@ -109,6 +109,7 @@ def main() -> int:
         }
 
         # Detectar y eliminar duplicados promocionales
+        duplicates = []
         if classifier.dup_enabled:
             logger.info("Detectando duplicados promocionales...")
             duplicates = classifier.find_duplicates(emails)
@@ -121,48 +122,53 @@ def main() -> int:
                 emails = [e for e in emails if e["id"] not in duplicate_ids]
 
         # Filtrar classification_results para quitar emails ya borrados como duplicados
-        classification_results = [
-            r for r in classification_results
-            if r["email"]["id"] not in duplicate_ids
-        ] if duplicates else classification_results
+        duplicate_ids = {d["id"] for d in duplicates}
+        if duplicate_ids:
+            classification_results = [
+                r for r in classification_results
+                if r["email"]["id"] not in duplicate_ids
+            ]
 
         # Aplicar acciones (etiquetar, archivar, auto-eliminar promos)
         logger.info("Aplicando acciones...")
         action_results = mail_client.apply_actions(classification_results, emails, classifier)
 
-        # Filtrar correos sin responder para el resumen
+        # Categoría asignada a cada correo (necesaria para separar UAL y ESI en el digest)
+        category_by_id = {
+            r["email"]["id"]: r.get("category")
+            for r in classification_results
+        }
+
+        # Filtrar correos sin responder para el resumen (UAL/ESI tienen su propia sección)
         unreplied_emails = [
             email for email in emails
             if email.get("id") not in processed_ids
+            and category_by_id.get(email["id"]) not in ("ual", "esi")
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
         # Filtrar correos UAL/ESI para sección especial en digest (máx. 14 días de antigüedad)
-        from datetime import datetime, timedelta
-        cutoff_date = datetime.now() - timedelta(days=classifier.ual_max_age_days)
-        
         ual_emails = []
         for email in emails:
-            if email.get("id") not in processed_ids:
-                is_ual_or_esi = any(
-                    r["email"]["id"] == email["id"] and r.get("category") in ("ual", "esi")
-                    for r in classification_results
-                )
-                if is_ual_or_esi:
-                    # Verificar antigüedad del correo
-                    date_str = email.get("date", "")
-                    if date_str:
-                        try:
-                            from email.utils import parsedate_to_datetime
-                            dt = parsedate_to_datetime(date_str)
-                            if dt.tzinfo:
-                                dt = dt.replace(tzinfo=None)
-                            if dt >= cutoff_date:
-                                ual_emails.append(email)
-                        except Exception:
-                            ual_emails.append(email)
-                    else:
-                        ual_emails.append(email)
+            if email.get("id") in processed_ids:
+                continue
+            category = category_by_id.get(email["id"])
+            if category not in ("ual", "esi"):
+                continue
+            if not DigestBuilder._is_recent(email, classifier.ual_max_age_days):
+                continue
+            enriched = dict(email)
+            enriched["category"] = category
+            ual_emails.append(enriched)
+
+        ual_emails.sort(key=DigestBuilder._email_date, reverse=True)
+
+        ual_count = sum(1 for e in ual_emails if e.get("category") == "ual")
+        esi_count = sum(1 for e in ual_emails if e.get("category") == "esi")
+        logger.info(
+            f"UAL/ESI de los últimos {classifier.ual_max_age_days} días: "
+            f"{ual_count} UAL, {esi_count} ESI"
+        )
 
         # Construir y enviar resumen (siempre enviar si hay algo que reportar)
         if unreplied_emails or ual_emails:
@@ -182,7 +188,7 @@ def main() -> int:
             save_processed_ids(processed_ids)
             logger.info(f"IDs procesados actualizados: {len(processed_ids)} total")
         else:
-            logger.info("No hay correos sin responder, pendientes de revisión ni UAL/ESI para notificar")
+            logger.info("No hay correos sin responder ni UAL/ESI para notificar")
 
         # Guardar stats en BD para chatbot
         if db:

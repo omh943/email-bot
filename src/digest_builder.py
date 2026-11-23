@@ -3,9 +3,11 @@ Constructor de resúmenes (digest) de correos.
 Genera versiones HTML y texto plano para envío por correo o Telegram.
 """
 import logging
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
 from email.utils import parsedate_to_datetime
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +22,66 @@ class DigestBuilder:
         self.format = self.digest_config.get("format", "html")
 
     @staticmethod
-    def _gmail_link(email_id: str, thread_id: str = None, subject: str = "") -> str:
-        """Genera link directo al correo en Gmail Web usando búsqueda por asunto"""
-        # Búsqueda por asunto: funciona con IMAP y Gmail web
-        from urllib.parse import quote
-        clean_subject = quote(subject.strip()) if subject else ""
-        return f"https://mail.google.com/mail/u/0/#search/{clean_subject}"
+    def _message_id(email: Dict) -> str:
+        """Obtiene el Message-ID real del correo (IMAP y Gmail API lo guardan en raw_headers)."""
+        headers = email.get("raw_headers") or {}
+        for key, value in headers.items():
+            if str(key).lower() == "message-id" and value:
+                return str(value).strip().strip("<>")
+        return str(email.get("message_id", "") or "").strip().strip("<>")
+
+    @classmethod
+    def _gmail_link(cls, email: Dict) -> str:
+        """
+        Genera un enlace que abre el correo concreto en Gmail Web.
+
+        Con IMAP el "id" del correo es el número de secuencia del buzón, NO el id
+        de Gmail, así que no sirve para construir enlaces. Lo que sí tenemos es
+        la cabecera Message-ID, que Gmail puede buscar con rfc822msgid:.
+        """
+        msg_id = cls._message_id(email)
+        if msg_id:
+            query = quote(f"rfc822msgid:{msg_id}", safe="")
+            return f"https://mail.google.com/mail/u/0/#search/{query}"
+
+        # Fallback: búsqueda por remitente + asunto (abre la lista filtrada).
+        subject = (email.get("subject") or "").strip()
+        match = re.search(r"[\w.+-]+@[\w.-]+", email.get("from") or "")
+        parts = []
+        if match:
+            parts.append(f"from:{match.group(0)}")
+        if subject:
+            parts.append(f'subject:("{subject}")')
+        query = quote(" ".join(parts), safe="")
+        return f"https://mail.google.com/mail/u/0/#search/{query}"
+
+    @staticmethod
+    def _email_date(email: Dict) -> datetime:
+        """Fecha del correo como datetime naive (para ordenar y filtrar)."""
+        date_str = email.get("date", "")
+        if not date_str:
+            return datetime.min
+        try:
+            dt = parsedate_to_datetime(date_str)
+            if dt.tzinfo:
+                dt = dt.replace(tzinfo=None)
+            return dt
+        except Exception:
+            return datetime.min
+
+    @classmethod
+    def _is_recent(cls, email: Dict, max_age_days: int) -> bool:
+        """True si el correo tiene como máximo max_age_days días de antigüedad."""
+        dt = cls._email_date(email)
+        if dt is datetime.min:
+            return True  # Sin fecha válida: no lo descartamos
+        return dt >= datetime.now() - timedelta(days=max_age_days)
 
     def _email_row_html(self, i: int, email: Dict, show_gmail_link: bool = True) -> str:
         """Genera fila HTML para un correo con link a Gmail"""
         subject = email.get("subject", "(sin asunto)")
         from_addr = email.get("from", "(desconocido)")
         date_str = email.get("date", "")
-        email_id = email.get("id", "")
-        thread_id = email.get("thread_id", "")
 
         try:
             if date_str:
@@ -44,7 +92,7 @@ class DigestBuilder:
         except Exception:
             date_fmt = "Fecha inválida"
 
-        gmail_url = self._gmail_link(email_id, thread_id, subject) if show_gmail_link else "#"
+        gmail_url = self._gmail_link(email) if show_gmail_link else "#"
         link_attr = f'href="{gmail_url}" target="_blank" style="color: #0066cc; text-decoration: none;"' if show_gmail_link else 'style="color: #333;"'
 
         return f"""
@@ -120,6 +168,7 @@ class DigestBuilder:
             "generated_at": datetime.now().isoformat(),
             "stats": stats,
             "unreplied_count": len(unreplied_emails),
+            "unreplied_emails": unreplied_emails,
             "ual_count": len(ual_emails),
             "ual_emails": ual_emails
         }
@@ -228,64 +277,14 @@ class DigestBuilder:
         {more}
 """
 
-    def _build_text_pending_review(self, emails: List[Dict], max_shown: int) -> str:
-        lines = [f"\n⏳ CORREOS PENDIENTES DE REVISIÓN (Newsletters/Recibos)", "─" * 40]
-        shown = emails[:max_shown]
-
-        for i, email in enumerate(shown, 1):
-            subject = email.get("subject", "(sin asunto)")
-            from_addr = email.get("from", "(desconocido)")
-            date_str = email.get("date", "")
-
-            try:
-                if date_str:
-                    dt = parsedate_to_datetime(date_str)
-                    date_fmt = dt.strftime("%d/%m/%Y %H:%M")
-                else:
-                    date_fmt = "Fecha desconocida"
-            except Exception:
-                date_fmt = "Fecha inválida"
-
-            if len(from_addr) > 50:
-                from_addr = from_addr[:47] + "..."
-
-            lines.append(f"\n{i}. {subject}")
-            lines.append(f"   De: {from_addr}")
-            lines.append(f"   Fecha: {date_fmt}")
-
-        if len(emails) > max_shown:
-            lines.append(f"\n... y {len(emails) - max_shown} correos más.")
-
-        return "\n".join(lines)
-
     def _build_text_ual(self, emails: List[Dict], max_shown: int, max_age_days: int = 14) -> str:
+        # Solo correos de los últimos max_age_days días, los más recientes primero
+        recent = [e for e in emails if self._is_recent(e, max_age_days)]
+        recent.sort(key=self._email_date, reverse=True)
+
         # Separar UAL general y ESI usando la categoría asignada por el clasificador
-        esi_emails = []
-        ual_general = []
-        for email in emails:
-            category = email.get("category", "")
-            if category == "esi":
-                esi_emails.append(email)
-            else:
-                ual_general.append(email)
-        
-        # Filtrar solo correos de max_age_days días de antigüedad
-        now = datetime.now()
-        def is_within_age(email):
-            date_str = email.get("date", "")
-            if not date_str:
-                return True
-            try:
-                dt = parsedate_to_datetime(date_str)
-                if dt.tzinfo:
-                    dt = dt.replace(tzinfo=None)
-                days_old = (now - dt).days
-                return days_old <= max_age_days
-            except Exception:
-                return True
-        
-        ual_general = [e for e in ual_general if is_within_age(e)]
-        esi_emails = [e for e in esi_emails if is_within_age(e)]
+        esi_emails = [e for e in recent if e.get("category") == "esi"]
+        ual_general = [e for e in recent if e.get("category") != "esi"]
         
         lines = [f"\n🏫 CORREOS UAL / ESI (últimos {max_age_days} días, ordenados por recientes)", "─" * 40]
         
@@ -336,33 +335,13 @@ class DigestBuilder:
         return "\n".join(lines)
 
     def _build_html_ual(self, emails: List[Dict], max_shown: int, max_age_days: int = 14) -> str:
+        # Solo correos de los últimos max_age_days días, los más recientes primero
+        recent = [e for e in emails if self._is_recent(e, max_age_days)]
+        recent.sort(key=self._email_date, reverse=True)
+
         # Separar UAL general y ESI usando la categoría asignada por el clasificador
-        esi_emails = []
-        ual_general = []
-        for email in emails:
-            category = email.get("category", "")
-            if category == "esi":
-                esi_emails.append(email)
-            else:
-                ual_general.append(email)
-        
-        # Filtrar solo correos de max_age_days días de antigüedad
-        now = datetime.now()
-        def is_within_age(email):
-            date_str = email.get("date", "")
-            if not date_str:
-                return True
-            try:
-                dt = parsedate_to_datetime(date_str)
-                if dt.tzinfo:
-                    dt = dt.replace(tzinfo=None)
-                days_old = (now - dt).days
-                return days_old <= max_age_days
-            except Exception:
-                return True
-        
-        ual_general = [e for e in ual_general if is_within_age(e)]
-        esi_emails = [e for e in esi_emails if is_within_age(e)]
+        esi_emails = [e for e in recent if e.get("category") == "esi"]
+        ual_general = [e for e in recent if e.get("category") != "esi"]
         
         html_parts = []
         
@@ -413,7 +392,7 @@ class DigestBuilder:
             </details>""")
         
         if not html_parts:
-            return "<p style='color: green;'>✅ No hay correos UAL/ESI (últimos {max_age_days} días).</p>"
+            return f"<p style='color: green;'>✅ No hay correos UAL/ESI (últimos {max_age_days} días).</p>"
         
         return f"""
         <h2 style="color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px;">🏫 UAL / ESI (click para expandir, click en asunto para abrir en Gmail)</h2>
@@ -440,7 +419,6 @@ https://github.com/tu-usuario/email-cleaner-bot
         """Construye mensaje optimizado para Telegram (Markdown)"""
         stats = digest["stats"]
         unreplied_count = digest.get("unreplied_count", 0)
-        pending_count = digest.get("pending_review_count", 0)
         ual_count = digest.get("ual_count", 0)
 
         lines = [
@@ -450,7 +428,6 @@ https://github.com/tu-usuario/email-cleaner-bot
             f"  📰 Newsletters: {stats.get('newsletters_labeled', 0)} etiquetadas, {stats.get('newsletters_archived', 0)} archivadas",
             f"  🧾 Recibos: {stats.get('receipts_labeled', 0)} etiquetados, {stats.get('receipts_archived', 0)} archivados",
             f"  🏫 UAL/ESI: {stats.get('ual_labeled', 0)} UAL, {stats.get('esi_labeled', 0)} ESI",
-            f"  ⏳ Pendientes revisión: {stats.get('pending_review', 0)}",
             f"  🛡️ Protegidos: {stats.get('protected_skipped', 0)}",
             f"  🗑️ Duplicados eliminados: {stats.get('duplicates_deleted', 0)}",
         ]

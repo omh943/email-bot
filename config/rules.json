@@ -111,8 +111,7 @@
     "Spam",
     "Promociones",
     "Social",
-    "Foros",
-    "Pending_Review"
+    "Foros"
   ],
   "unreplied_exclude_senders": [
     "noreply@",
@@ -226,7 +225,7 @@
         "@inlumine.ual.es"
       ],
       "esi": [
-        "@esi@ual.es"
+        "esi@ual.es"
       ]
     },
     "max_age_days": 14,
@@ -352,9 +351,9 @@
     "include_newsletters_count": true,
     "include_receipts_count": true,
     "include_unreplied_list": true,
-    "include_pending_review_list": true,
+    "include_ual_list": true,
     "max_unreplied_shown": 20,
-    "max_pending_review_shown": 30,
+    "max_ual_shown": 50,
     "format": "html"
   }
 }

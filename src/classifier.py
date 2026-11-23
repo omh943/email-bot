@@ -121,17 +121,18 @@ class EmailClassifier:
         body = email.get("body", "").lower()
         labels = [l.lower() for l in email.get("labels", [])]
 
-        # Verificar si está protegido (no archivar nunca)
-        if self._is_protected(subject, from_addr, body):
-            logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
-            return "protected", [], 0.0
-
-        # Verificar UAL/ESI (prioridad alta - nunca archivar)
+        # Verificar UAL/ESI primero: son remitentes exactos y siempre deben
+        # aparecer en el resumen, aunque su cuerpo contenga palabras "protegidas".
         if self.ual_enabled:
             ual_category = self._classify_ual(subject, from_addr, body)
             if ual_category:
                 actions = self._get_actions_for_category(ual_category)
                 return ual_category, actions, 0.9
+
+        # Verificar si está protegido (no archivar nunca)
+        if self._is_protected(subject, from_addr, body):
+            logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
+            return "protected", [], 0.0
 
         # Verificar etiquetas existentes primero (más confiable)
         if any(l in self.newsletter_labels for l in labels):
@@ -158,24 +159,38 @@ class EmailClassifier:
 
         return "other", [], 0.0
 
+    _ADDRESS_RE = re.compile(r"[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}")
+
     def _classify_ual(self, subject: str, from_addr: str, body: str) -> Optional[str]:
-        """Clasifica correos de UAL/ESI - SOLO remitentes exactos configurados"""
+        """Clasifica correos de UAL/ESI - SOLO por remitente."""
         if not self.ual_enabled:
             return None
-            
-        from_lower = from_addr.lower()
-        
-        # ESI: remitente es @esi@ual.es (exacto) o contiene esi@ual.es
-        if "@esi@ual.es" in from_lower:
+
+        from_lower = (from_addr or "").lower()
+        addresses = self._ADDRESS_RE.findall(from_lower)
+
+        # ESI: únicamente esi@ual.es (y variantes esi.* / esi-* del mismo buzón)
+        for addr in addresses:
+            local, _, domain = addr.partition("@")
+            if domain == "ual.es" and (
+                local == "esi"
+                or local.startswith("esi.")
+                or local.startswith("esi-")
+                or local.startswith("esi_")
+            ):
+                return "esi"
+        # Respaldo por si la cabecera From viene sin formato de dirección
+        if "esi@ual.es" in from_lower:
             return "esi"
-        # También detectar si es dominio ual.es y contiene 'esi' en cualquier parte del from
-        if "@ual.es" in from_lower and "esi" in from_lower:
-            return "esi"
-        
-        # UAL: remitentes exactos @ual.es y @inlumine.ual.es (que NO sean esi)
+
+        # UAL: dominios exactos @ual.es y @inlumine.ual.es
+        for addr in addresses:
+            domain = addr.partition("@")[2]
+            if domain in ("ual.es", "inlumine.ual.es"):
+                return "ual"
         if any(sender in from_lower for sender in self.ual_exact_senders):
             return "ual"
-        
+
         return None
 
     def _is_protected(self, subject: str, from_addr: str, body: str) -> bool:
