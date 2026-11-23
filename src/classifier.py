@@ -163,12 +163,17 @@ class EmailClassifier:
         if not self.ual_enabled:
             return None
             
-        # ESI: solo remitentes exactos @esi@ual.es
-        if any(sender in from_addr for sender in self.esi_exact_senders):
+        from_lower = from_addr.lower()
+        
+        # ESI: remitente es @esi@ual.es o contiene esi@ual.es
+        if "@esi@ual.es" in from_lower:
+            return "esi"
+        # Más robusto: dominio ual.es y contiene 'esi' en cualquier parte del from
+        if "@ual.es" in from_lower and "esi" in from_lower:
             return "esi"
         
-        # UAL: solo remitentes exactos @ual.es y @inlumine.ual.es
-        if any(sender in from_addr for sender in self.ual_exact_senders):
+        # UAL: remitentes exactos @ual.es y @inlumine.ual.es (que NO sean esi)
+        if any(sender in from_lower for sender in self.ual_exact_senders):
             return "ual"
         
         return None
