@@ -74,8 +74,10 @@ class EmailClassifier:
         ual_config = self.rules.get("ual_filters", {})
         self.ual_enabled = ual_config.get("enabled", False)
         self.ual_domains = [d.lower() for d in ual_config.get("domains", [])]
-        self.ual_exact_senders = [s.lower() for s in ual_config.get("exact_senders", [])]
-        self.esi_keywords = [k.lower() for k in ual_config.get("esi_keywords", [])]
+        exact_senders_cfg = ual_config.get("exact_senders", {})
+        self.ual_exact_senders = [s.lower() for s in exact_senders_cfg.get("ual", [])]
+        self.esi_exact_senders = [s.lower() for s in exact_senders_cfg.get("esi", [])]
+        self.ual_max_age_days = int(ual_config.get("max_age_days", 14))
         self.ual_label_prefix = ual_config.get("label_prefix", "UAL/")
         
         # Duplicate detection
@@ -157,21 +159,16 @@ class EmailClassifier:
         return "other", [], 0.0
 
     def _classify_ual(self, subject: str, from_addr: str, body: str) -> Optional[str]:
-        """Clasifica correos de UAL/ESI - SOLO remitentes exactos"""
+        """Clasifica correos de UAL/ESI - SOLO remitentes exactos configurados"""
         if not self.ual_enabled:
             return None
             
-        # 1. Verificar remitentes exactos (@inlumine.ual.es, @ual.es, @esi@ual.es) - MÁXIMA PRIORIDAD
-        is_exact_ual = any(sender in from_addr for sender in self.ual_exact_senders)
-        if is_exact_ual:
-            # Solo @esi@ual.es es ESI, el resto UAL
-            is_esi = "@esi@ual.es" in from_addr
-            return "esi" if is_esi else "ual"
+        # ESI: solo remitentes exactos @esi@ual.es
+        if any(sender in from_addr for sender in self.esi_exact_senders):
+            return "esi"
         
-        # 2. Verificar dominio UAL general
-        is_ual_domain = any(domain in from_addr for domain in self.ual_domains)
-        
-        if is_ual_domain:
+        # UAL: solo remitentes exactos @ual.es y @inlumine.ual.es
+        if any(sender in from_addr for sender in self.ual_exact_senders):
             return "ual"
         
         return None

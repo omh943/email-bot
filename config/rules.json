@@ -220,58 +220,16 @@
       "ual.es",
       "inlumine.ual.es"
     ],
-    "exact_senders": [
-      "@ual.es",
-      "@inlumine.ual.es",
-      "@esi@ual.es"
-    ],
-    "esi_keywords": [
-      "esi",
-      "escuela superior de ingeniería",
-      "escuela de ingeniería",
-      "ingeniería informática",
-      "ingeniería industrial",
-      "ingeniería mecánica",
-      "ingeniería eléctrica",
-      "ingeniería electrónica",
-      "ingeniería de telecomunicación",
-      "grado informática",
-      "grado industrial",
-      "grado mecánica",
-      "grado eléctrica",
-      "grado telecomunicación",
-      "master informática",
-      "master industrial",
-      "tfm",
-      "tfg",
-      "prácticas",
-      "practicas",
-      "prácticas externas",
-      "bolsa empleo",
-      "bolsa de empleo",
-      "empleabilidad",
-      "convocatoria",
-      "matrícula",
-      "matricula",
-      "calificaciones",
-      "notas",
-      "actas",
-      "horarios",
-      "aula virtual",
-      "moodle",
-      "ual.es/esi",
-      "esi.ual.es",
-      "departamento de informática",
-      "departamento de ingeniería",
-      "profesorado esi",
-      "alumnos esi",
-      "delegación alumnos",
-      "delegacion alumnos",
-      "consejo escuela",
-      "junta escuela",
-      "comisión permanente",
-      "comision permanente"
-    ],
+    "exact_senders": {
+      "ual": [
+        "@ual.es",
+        "@inlumine.ual.es"
+      ],
+      "esi": [
+        "@esi@ual.es"
+      ]
+    },
+    "max_age_days": 14,
     "label_prefix": "UAL/"
   },
   "auto_delete_promos": {

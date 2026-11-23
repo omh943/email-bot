@@ -137,13 +137,32 @@ def main() -> int:
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
-        # Filtrar correos UAL/ESI para sección especial en digest
-        ual_emails = [
-            email for email in emails
-            if email.get("id") not in processed_ids
-            and any(r["email"]["id"] == email["id"] and r.get("category") in ("ual", "esi")
-                    for r in classification_results)
-        ]
+        # Filtrar correos UAL/ESI para sección especial en digest (máx. 14 días de antigüedad)
+        from datetime import datetime, timedelta
+        cutoff_date = datetime.now() - timedelta(days=classifier.ual_max_age_days)
+        
+        ual_emails = []
+        for email in emails:
+            if email.get("id") not in processed_ids:
+                is_ual_or_esi = any(
+                    r["email"]["id"] == email["id"] and r.get("category") in ("ual", "esi")
+                    for r in classification_results
+                )
+                if is_ual_or_esi:
+                    # Verificar antigüedad del correo
+                    date_str = email.get("date", "")
+                    if date_str:
+                        try:
+                            from email.utils import parsedate_to_datetime
+                            dt = parsedate_to_datetime(date_str)
+                            if dt.tzinfo:
+                                dt = dt.replace(tzinfo=None)
+                            if dt >= cutoff_date:
+                                ual_emails.append(email)
+                        except Exception:
+                            ual_emails.append(email)
+                    else:
+                        ual_emails.append(email)
 
         # Construir y enviar resumen (siempre enviar si hay algo que reportar)
         if unreplied_emails or ual_emails:

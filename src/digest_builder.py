@@ -20,13 +20,12 @@ class DigestBuilder:
         self.format = self.digest_config.get("format", "html")
 
     @staticmethod
-    def _gmail_link(email_id: str, thread_id: str = None) -> str:
-        """Genera link directo al correo en Gmail Web usando búsqueda por Message-ID"""
-        # Formato correcto que SIEMPRE funciona: búsqueda por rfc822msgid
-        # https://mail.google.com/mail/u/0/#search/rfc822msgid:{message_id}
-        # El message_id suele venir con < >, hay que limpiarlo
-        clean_id = email_id.strip("<>")
-        return f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{clean_id}"
+    def _gmail_link(email_id: str, thread_id: str = None, subject: str = "") -> str:
+        """Genera link directo al correo en Gmail Web usando búsqueda por asunto"""
+        # Búsqueda por asunto: funciona con IMAP y Gmail web
+        from urllib.parse import quote
+        clean_subject = quote(subject.strip()) if subject else ""
+        return f"https://mail.google.com/mail/u/0/#search/{clean_subject}"
 
     def _email_row_html(self, i: int, email: Dict, show_gmail_link: bool = True) -> str:
         """Genera fila HTML para un correo con link a Gmail"""
@@ -45,7 +44,7 @@ class DigestBuilder:
         except Exception:
             date_fmt = "Fecha inválida"
 
-        gmail_url = self._gmail_link(email_id, thread_id) if show_gmail_link else "#"
+        gmail_url = self._gmail_link(email_id, thread_id, subject) if show_gmail_link else "#"
         link_attr = f'href="{gmail_url}" target="_blank" style="color: #0066cc; text-decoration: none;"' if show_gmail_link else 'style="color: #333;"'
 
         return f"""
@@ -97,14 +96,15 @@ class DigestBuilder:
             text_parts.append("\n✅ No hay correos sin responder pendientes.")
             html_parts.append("<p style='color: green;'>✅ No hay correos sin responder pendientes.</p>")
 
-        # Correos UAL/ESI (con secciones colapsables)
+        # Correos UAL/ESI (con secciones colapsables, últimos 14 días)
         max_ual = self.digest_config.get("max_ual_shown", 50)
+        ual_max_age = self.rules.get("ual_filters", {}).get("max_age_days", 14)
         if ual_emails:
-            text_parts.append(self._build_text_ual(ual_emails, max_ual))
-            html_parts.append(self._build_html_ual(ual_emails, max_ual))
+            text_parts.append(self._build_text_ual(ual_emails, max_ual, ual_max_age))
+            html_parts.append(self._build_html_ual(ual_emails, max_ual, ual_max_age))
         elif self.digest_config.get("include_ual_list", True):
-            text_parts.append("\n✅ No hay correos UAL/ESI.")
-            html_parts.append("<p style='color: green;'>✅ No hay correos UAL/ESI.</p>")
+            text_parts.append(f"\n✅ No hay correos UAL/ESI (últimos {ual_max_age} días).")
+            html_parts.append(f"<p style='color: green;'>✅ No hay correos UAL/ESI (últimos {ual_max_age} días).</p>")
 
         # Pie
         text_parts.append(self._build_text_footer())
@@ -258,7 +258,7 @@ class DigestBuilder:
 
         return "\n".join(lines)
 
-    def _build_text_ual(self, emails: List[Dict], max_shown: int) -> str:
+    def _build_text_ual(self, emails: List[Dict], max_shown: int, max_age_days: int = 14) -> str:
         # Separar UAL general y ESI usando la categoría asignada por el clasificador
         esi_emails = []
         ual_general = []
@@ -269,7 +269,25 @@ class DigestBuilder:
             else:
                 ual_general.append(email)
         
-        lines = [f"\n🏫 CORREOS UAL / ESI (ordenados por recientes)", "─" * 40]
+        # Filtrar solo correos de max_age_days días de antigüedad
+        now = datetime.now()
+        def is_within_age(email):
+            date_str = email.get("date", "")
+            if not date_str:
+                return True
+            try:
+                dt = parsedate_to_datetime(date_str)
+                if dt.tzinfo:
+                    dt = dt.replace(tzinfo=None)
+                days_old = (now - dt).days
+                return days_old <= max_age_days
+            except Exception:
+                return True
+        
+        ual_general = [e for e in ual_general if is_within_age(e)]
+        esi_emails = [e for e in esi_emails if is_within_age(e)]
+        
+        lines = [f"\n🏫 CORREOS UAL / ESI (últimos {max_age_days} días, ordenados por recientes)", "─" * 40]
         
         if ual_general:
             lines.append(f"\n📍 UAL General ({len(ual_general)}):")
@@ -317,7 +335,7 @@ class DigestBuilder:
         
         return "\n".join(lines)
 
-    def _build_html_ual(self, emails: List[Dict], max_shown: int) -> str:
+    def _build_html_ual(self, emails: List[Dict], max_shown: int, max_age_days: int = 14) -> str:
         # Separar UAL general y ESI usando la categoría asignada por el clasificador
         esi_emails = []
         ual_general = []
@@ -327,6 +345,24 @@ class DigestBuilder:
                 esi_emails.append(email)
             else:
                 ual_general.append(email)
+        
+        # Filtrar solo correos de max_age_days días de antigüedad
+        now = datetime.now()
+        def is_within_age(email):
+            date_str = email.get("date", "")
+            if not date_str:
+                return True
+            try:
+                dt = parsedate_to_datetime(date_str)
+                if dt.tzinfo:
+                    dt = dt.replace(tzinfo=None)
+                days_old = (now - dt).days
+                return days_old <= max_age_days
+            except Exception:
+                return True
+        
+        ual_general = [e for e in ual_general if is_within_age(e)]
+        esi_emails = [e for e in esi_emails if is_within_age(e)]
         
         html_parts = []
         
@@ -377,7 +413,7 @@ class DigestBuilder:
             </details>""")
         
         if not html_parts:
-            return "<p style='color: green;'>✅ No hay correos UAL/ESI.</p>"
+            return "<p style='color: green;'>✅ No hay correos UAL/ESI (últimos {max_age_days} días).</p>"
         
         return f"""
         <h2 style="color: #333; border-bottom: 2px solid #0066cc; padding-bottom: 8px;">🏫 UAL / ESI (click para expandir, click en asunto para abrir en Gmail)</h2>
