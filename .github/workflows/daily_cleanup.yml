@@ -62,3 +62,19 @@ jobs:
           path: data/telegram_bot.db
           retention-days: 7
           overwrite: true
+
+      # Commit automático del dataset y processed_ids al repositorio
+      # para memoria persistente sin base de datos externa.
+      - name: Commit dataset y processed_ids
+        if: always()
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git remote set-url origin "https://x-access-token:${{ github.token }}@github.com/omh943/email-bot.git"
+          git add data/dataset.json data/processed_ids.json
+          if ! git diff --quiet || ! git diff --cached --quiet; then
+            git commit -m "chore: actualizar dataset de correos y processed_ids [skip ci]"
+            git push origin main
+          else
+            echo "Sin cambios que commitear"
+          fi

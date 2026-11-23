@@ -4,8 +4,10 @@ Conecta, lee, aplica reglas y envía el resumen.
 """
 import sys
 import logging
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import List, Dict, Any
 
 # Añadir directorio raíz al path para imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -198,6 +200,14 @@ def main() -> int:
             db.save_daily_stats(action_results)
             logger.info("Stats diarias guardadas en BD")
 
+        # Guardar dataset persistente en JSON para chatbot en la nube
+        dataset = _build_dataset(emails, classification_results, action_results, category_by_id)
+        dataset_path = DATA_DIR / "dataset.json"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False, indent=2)
+        logger.info(f"Dataset guardado: {dataset_path} ({len(dataset['emails'])} correos)")
+
         # Cerrar conexión
         mail_client.disconnect()
 
@@ -209,6 +219,43 @@ def main() -> int:
     except Exception as e:
         logger.exception(f"Error crítico en la ejecución: {e}")
         return 1
+
+
+def _build_dataset(emails: List[Dict], classification_results: List[Dict],
+                   action_results: Dict[str, int], category_by_id: Dict) -> Dict[str, Any]:
+    """Construye el dataset persistente con emails clasificados para el chatbot en la nube."""
+    category_by_action = {r["email"]["id"]: r.get("category") for r in classification_results}
+    actions_by_id = {r["email"]["id"]: r.get("actions", []) for r in classification_results}
+
+    dataset_emails = []
+    for email in emails:
+        eid = email.get("id", "")
+        category = category_by_action.get(eid, category_by_id.get(eid, "other"))
+        msg_id = DigestBuilder._message_id(email)
+        gmail_link = DigestBuilder._gmail_link(email) if msg_id else f"https://mail.google.com/mail/u/0/#search/from:{email.get('from','')}"
+
+        dataset_emails.append({
+            "id": eid,
+            "thread_id": email.get("thread_id", ""),
+            "subject": email.get("subject", "(sin asunto)"),
+            "from": email.get("from", "(desconocido)"),
+            "to": email.get("to", ""),
+            "date": email.get("date", ""),
+            "category": category,
+            "actions": actions_by_id.get(eid, []),
+            "gmail_link": gmail_link,
+            "snippet": (email.get("snippet") or email.get("body", "")[:200]),
+            "labels": email.get("labels", []),
+        })
+
+    dataset_emails.sort(key=lambda e: DigestBuilder._email_date({"date": e.get("date", "")}), reverse=True)
+
+    return {
+        "generated_at": datetime.now().isoformat(),
+        "total_emails": len(dataset_emails),
+        "stats": action_results,
+        "emails": dataset_emails,
+    }
 
 
 if __name__ == "__main__":

@@ -12,12 +12,12 @@ credentials.json
 token.json
 client_secret*.json
 
-# Datos de runtime (IDs procesados, caches)
+# Datos de runtime (IDs procesados, caches, dataset)
 data/processed_ids.json
-data/*.json
 data/*.db
 data/*.db-*
 !data/.gitkeep
+!data/dataset.json
 
 # Logs
 logs/*.log
