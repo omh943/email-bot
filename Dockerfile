@@ -1,42 +1,24 @@
-# Dockerfile para Email Cleaner Bot + Telegram Chatbot 24/7
 FROM python:3.11-slim
 
-# Metadata
-LABEL maintainer="Email Cleaner Bot"
-LABEL description="Email Cleaner Bot + Telegram Chatbot 24/7"
-
-# Instalar dependencias del sistema
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Crear usuario no-root
-RUN useradd -m -u 1000 -s /bin/bash botuser
-
-# Directorio de trabajo
 WORKDIR /app
 
-# Copiar requirements primero (cache de capas)
+# Instalar dependencias
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar código
-COPY --chown=botuser:botuser . .
+COPY src ./src
+COPY config ./config
 
-# Crear directorios necesarios
-RUN mkdir -p /app/data /app/logs && chown -R botuser:botuser /app
+# Puerto para healthcheck (Hugging Face Spaces / Render)
+ENV PORT=7860
 
-# Cambiar a usuario no-root
-USER botuser
+# Variables por defecto (sobrescribirse en Secrets/Environment Variables)
+ENV TELEGRAM_BOT_TOKEN=""
+ENV TELEGRAM_CHAT_ID=""
+ENV OPENROUTER_API_KEY=""
+ENV OPENROUTER_MODEL="nvidia/nemotron-3.5-super-vl-120b-a12b"
+ENV GITHUB_REPO="omh943/email-bot"
+ENV GITHUB_API_TOKEN=""
 
-# Variables de entorno
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Healthcheck
-HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import sqlite3; sqlite3('/app/data/telegram_bot.db', 'SELECT 1')" || exit 1
-
-# Comando por defecto (ejecutar ambos servicios con supervisord)
-CMD ["python", "-m", "src.telegram_bot"]
+CMD ["python", "-m", "src.chatbot_cloud"]
