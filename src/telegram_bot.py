@@ -7,7 +7,9 @@ Telegram Chatbot 24/7 para Email Cleaner Bot.
 """
 import logging
 import json
+import re
 import sqlite3
+from urllib.parse import quote
 import requests
 import threading
 import time
@@ -20,6 +22,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
+from src.digest_builder import DigestBuilder
 
 from config.settings import (
     TELEGRAM_WEBHOOK, EMAIL_USER, DATA_DIR, LOGS_DIR
@@ -85,6 +88,7 @@ class DatabaseManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     email_id TEXT UNIQUE NOT NULL,
                     thread_id TEXT,
+                    message_id TEXT,
                     subject TEXT,
                     from_addr TEXT,
                     to_addr TEXT,
@@ -111,7 +115,6 @@ class DatabaseManager:
                     receipts_archived INTEGER DEFAULT 0,
                     ual_labeled INTEGER DEFAULT 0,
                     esi_labeled INTEGER DEFAULT 0,
-                    pending_review INTEGER DEFAULT 0,
                     protected_skipped INTEGER DEFAULT 0,
                     promos_deleted INTEGER DEFAULT 0,
                     duplicates_deleted INTEGER DEFAULT 0,
@@ -127,6 +130,12 @@ class DatabaseManager:
                     status TEXT DEFAULT 'pending'
                 );
             """)
+
+            # Migración: añadir message_id a email_cache si la BD es antigua.
+            try:
+                conn.execute("ALTER TABLE email_cache ADD COLUMN message_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # La columna ya existe
     
     def save_conversation(self, chat_id: str, user_msg: str, bot_resp: str, command: str = None):
         with self.get_conn() as conn:
@@ -165,10 +174,11 @@ class DatabaseManager:
             for e in emails:
                 conn.execute("""
                     INSERT OR REPLACE INTO email_cache 
-                    (email_id, thread_id, subject, from_addr, to_addr, date, body, labels, category, actions)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (email_id, thread_id, message_id, subject, from_addr, to_addr, date, body, labels, category, actions)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    e.get("id"), e.get("thread_id"), e.get("subject"),
+                    e.get("id"), e.get("thread_id"), DigestBuilder._message_id(e),
+                    e.get("subject"),
                     e.get("from"), e.get("to"), e.get("date"),
                     e.get("body", "")[:5000],  # Limit body size
                     json.dumps(e.get("labels", [])),
@@ -191,6 +201,15 @@ class DatabaseManager:
                 (f"%{term}%", f"%{term}%", f"%{term}%", limit)
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_email_by_id(self, email_id: str) -> Optional[Dict]:
+        """Recupera un correo completo de la caché por su ID"""
+        with self.get_conn() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM email_cache WHERE email_id = ?", (email_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
     
     def save_daily_stats(self, stats: Dict):
         with self.get_conn() as conn:
@@ -198,9 +217,9 @@ class DatabaseManager:
             conn.execute("""
                 INSERT OR REPLACE INTO bot_stats 
                 (stat_date, newsletters_labeled, newsletters_archived, receipts_labeled,
-                 receipts_archived, ual_labeled, esi_labeled, pending_review,
+                 receipts_archived, ual_labeled, esi_labeled,
                  protected_skipped, promos_deleted, duplicates_deleted, unreplied_count, generated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 date_str,
                 stats.get("newsletters_labeled", 0),
@@ -209,7 +228,6 @@ class DatabaseManager:
                 stats.get("receipts_archived", 0),
                 stats.get("ual_labeled", 0),
                 stats.get("esi_labeled", 0),
-                stats.get("pending_review", 0),
                 stats.get("protected_skipped", 0),
                 stats.get("promos_deleted", 0),
                 stats.get("duplicates_deleted", 0),
@@ -428,8 +446,28 @@ class TelegramChatBot:
             self._show_category(cat, chat_id)
     
     def _open_email(self, email_id: str, chat_id: str):
-        """Abre email en Gmail"""
-        url = f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{email_id.strip('<>')}"
+        """Abre email en Gmail usando el Message-ID real."""
+        email = self.db.get_email_by_id(email_id)
+        if not email:
+            self.send_message("📭 No se encontró el correo.", chat_id=chat_id)
+            return
+
+        # DigestBuilder._message_id extrae el Message-ID real de raw_headers
+        msg_id = DigestBuilder._message_id(email)
+        if msg_id:
+            url = f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{msg_id}"
+        else:
+            # Fallback: búsqueda por remitente + asunto
+            subject = email.get("subject") or ""
+            sender = email.get("from") or email.get("from_addr") or ""
+            match = re.search(r"[\w.+-]+@[\w.-]+", sender)
+            parts = []
+            if match:
+                parts.append(f"from:{match.group(0)}")
+            if subject:
+                parts.append(f'subject:("{subject}")')
+            url = f"https://mail.google.com/mail/u/0/#search/{quote(' '.join(parts), safe='')}"
+
         self.send_message(
             f"📧 [Abrir en Gmail]({url})",
             parse_mode="Markdown",
@@ -557,6 +595,22 @@ class TelegramChatBot:
         self.send_message(text + "\n\n_Usa /buscar para encontrar específicos_", chat_id=chat_id)
         return "Sin responder enviado"
     
+    def cmd_pendientes(self, args: str, chat_id: str = None) -> str:
+        chat_id = chat_id or self.config.chat_id
+        stats = self.db.get_latest_stats()
+        if not stats:
+            return self.send_message("📭 No hay datos.", chat_id=chat_id)
+        
+        count = stats.get("unreplied_count", 0)
+        text = (
+            f"⏳ *Correos sin contestar*\n\n"
+            f"• Total sin responder (>3 días): *{count}*\n"
+            f"• Usa `/buscar` para encontrar específicos\n"
+            f"• ¡El bot responde 24/7!"
+        )
+        self.send_message(text, chat_id=chat_id)
+        return "Pendientes enviado"
+    
     def cmd_buscar(self, args: str, chat_id: str = None) -> str:
         chat_id = chat_id or self.config.chat_id
         if not args:
@@ -608,7 +662,7 @@ class TelegramChatBot:
             f"• Duplicados: *{dup}*\n"
             f"• **Total: {deleted + dup}**\n\n"
             f"✅ Solo orgs (noreply@, marketing@, promo@...)\n"
-            f"🛡️ NUNCA: @gmail.com, @outlook.com, @ual.es, @esi@ual.es"
+            f"🛡️ NUNCA: @gmail.com, @outlook.com, @ual.es, @inlumine.ual.es"
         )
         self.send_message(text, chat_id=chat_id)
         return "Promos enviado"
@@ -624,7 +678,7 @@ class TelegramChatBot:
             f"🛡️ *Protegidos (no tocados): {protected}*\n\n"
             f"• 🏦 Bancos, facturas, pagos\n"
             f"• 🏛️ Hacienda, SS, BOE\n"
-            f"• 🏫 UAL / ESI (@esi@ual.es, @inlumine.ual.es...)\n"
+            f"• 🏫 UAL / ESI (@esi@ual.es, @ual.es, @inlumine.ual.es)\n"
             f"• 🏥 Médicos, seguros, legal\n"
             f"• 👤 Personales (@gmail.com, @outlook.com...)\n\n"
             f"✅ NUNCA se archivan ni eliminan."
@@ -728,7 +782,7 @@ class TelegramChatBot:
         text += f"  📰 Newsletters: {stats.get('newsletters_labeled',0)} etiquetadas, {stats.get('newsletters_archived',0)} archivadas\n"
         text += f"  🧾 Recibos: {stats.get('receipts_labeled',0)} etiquetados, {stats.get('receipts_archived',0)} archivados\n"
         text += f"  🏫 UAL: {stats.get('ual_labeled',0)} | ESI: {stats.get('esi_labeled',0)}\n"
-        text += f"  ⏳ Pendientes: {stats.get('pending_review',0)}\n"
+        text += f"  ⏳ Sin responder: {stats.get('unreplied_count',0)}\n"
         text += f"  🛡️ Protegidos: {stats.get('protected_skipped',0)}\n"
         text += f"  🗑️ Promos: {stats.get('promos_deleted',0)}\n"
         text += f"  🔄 Duplicados: {stats.get('duplicates_deleted',0)}\n"

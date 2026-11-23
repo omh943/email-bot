@@ -129,9 +129,11 @@ class EmailClassifier:
                 actions = self._get_actions_for_category(ual_category)
                 return ual_category, actions, 0.9
 
-        # Verificar si está protegido (no archivar nunca)
-        if self._is_protected(subject, from_addr, body):
-            logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
+        # Remitentes protegidos (bancos, organismos, personales): nunca tocar.
+        # Se comprueba pronto para no archivar correos sensibles, pero DESPUÉS
+        # de UAL/ESI para que esos correos siempre aparezcan en el resumen.
+        if self._is_protected_sender(from_addr):
+            logger.debug(f"Remitente protegido: {from_addr[:50]}")
             return "protected", [], 0.0
 
         # Verificar etiquetas existentes primero (más confiable)
@@ -156,6 +158,11 @@ class EmailClassifier:
         if receipt_score > newsletter_score and receipt_score >= 0.5:
             actions = self._get_actions_for_category("receipt")
             return "receipt", actions, receipt_score
+
+        # Fallback: protección (no archivar nunca)
+        if self._is_protected(subject, from_addr, body):
+            logger.debug(f"Correo protegido detectado: {email.get('subject', '')[:50]}")
+            return "protected", [], 0.0
 
         return "other", [], 0.0
 
@@ -192,6 +199,13 @@ class EmailClassifier:
             return "ual"
 
         return None
+
+    def _is_protected_sender(self, from_addr: str) -> bool:
+        """True si el remitente está en la lista de remitentes protegidos."""
+        for pattern in self.protected_sender_patterns:
+            if pattern.search(from_addr):
+                return True
+        return False
 
     def _is_protected(self, subject: str, from_addr: str, body: str) -> bool:
         """Verifica si el correo tiene contenido protegido que no debe archivarse"""

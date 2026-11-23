@@ -73,7 +73,7 @@ class DigestBuilder:
     def _is_recent(cls, email: Dict, max_age_days: int) -> bool:
         """True si el correo tiene como máximo max_age_days días de antigüedad."""
         dt = cls._email_date(email)
-        if dt is datetime.min:
+        if dt == datetime.min:
             return True  # Sin fecha válida: no lo descartamos
         return dt >= datetime.now() - timedelta(days=max_age_days)
 

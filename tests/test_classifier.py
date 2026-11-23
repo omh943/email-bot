@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 # Añadir src al path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.classifier import EmailClassifier
 
@@ -239,6 +239,9 @@ def test_batch_classification():
     assert len(results) == len(TEST_EMAILS)
 
     # Verificar categorías esperadas
+    # test_9 es un correo personal de @gmail.com. La config protege
+    # deliberadamente los dominios personales, así que la categoría
+    # correcta es "protected" (ni se archiva ni se elimina).
     expected = {
         "test_1": "newsletter",
         "test_2": "newsletter",
@@ -248,7 +251,7 @@ def test_batch_classification():
         "test_6": "other",
         "test_7": "newsletter",
         "test_8": "other",
-        "test_9": "other",
+        "test_9": "protected",
         "test_10": "other",
     }
 
