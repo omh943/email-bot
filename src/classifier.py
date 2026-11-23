@@ -165,10 +165,10 @@ class EmailClassifier:
             
         from_lower = from_addr.lower()
         
-        # ESI: remitente es @esi@ual.es o contiene esi@ual.es
+        # ESI: remitente es @esi@ual.es (exacto) o contiene esi@ual.es
         if "@esi@ual.es" in from_lower:
             return "esi"
-        # Más robusto: dominio ual.es y contiene 'esi' en cualquier parte del from
+        # También detectar si es dominio ual.es y contiene 'esi' en cualquier parte del from
         if "@ual.es" in from_lower and "esi" in from_lower:
             return "esi"
         
