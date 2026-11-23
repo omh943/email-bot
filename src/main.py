@@ -146,8 +146,8 @@ def main() -> int:
         ]
 
         # Construir y enviar resumen (siempre enviar si hay algo que reportar)
-        if unreplied_emails or pending_review_emails or ual_emails:
-            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(pending_review_emails)} pendientes revisión, {len(ual_emails)} UAL/ESI...")
+        if unreplied_emails or ual_emails:
+            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(ual_emails)} UAL/ESI...")
             digest = digest_builder.build_digest(
                 unreplied_emails=unreplied_emails,
                 ual_emails=ual_emails,
