@@ -65,19 +65,27 @@ jobs:
 
       # Commit automático del dataset y processed_ids al repositorio
       # para memoria persistente sin base de datos externa.
+      # Requiere el secreto DATA_PUSH_TOKEN (PAT con scope repo). Si no existe,
+      # solo sube el dataset como artifact para el chatbot.
       - name: Commit dataset y processed_ids
-        if: always() && secrets.DATA_PUSH_TOKEN != ''
+        if: always()
         run: |
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git remote set-url origin "https://x-access-token:${{ secrets.DATA_PUSH_TOKEN }}@github.com/omh943/email-bot.git"
           git add data/dataset.json data/processed_ids.json
           if ! git diff --quiet || ! git diff --cached --quiet; then
             git commit -m "chore: actualizar dataset de correos y processed_ids [skip ci]"
-            git push origin main
+            if [ -n "${DATA_PUSH_TOKEN}" ]; then
+              git remote set-url origin "https://x-access-token:${DATA_PUSH_TOKEN}@github.com/omh943/email-bot.git"
+              git push origin main
+            else
+              echo "No hay DATA_PUSH_TOKEN: commit local solo, dataset se sube como artifact"
+            fi
           else
             echo "Sin cambios que commitear"
           fi
+        env:
+          DATA_PUSH_TOKEN: ${{ secrets.DATA_PUSH_TOKEN }}
 
       # Subir dataset.json como artifact para el chatbot en la nube
       # (si no hay DATA_PUSH_TOKEN, el chatbot lo descarga desde aquí)
