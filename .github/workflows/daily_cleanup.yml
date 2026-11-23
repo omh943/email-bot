@@ -30,6 +30,8 @@ jobs:
           echo "DAYS_THRESHOLD=${{ secrets.DAYS_THRESHOLD || '3' }}" >> .env
           echo "DIGEST_TIME=08:00" >> .env
           echo "TIMEZONE=UTC" >> .env
+          echo "GITHUB_API_TOKEN=${{ github.token }}" >> .env
+          echo "GITHUB_REPO=omh943/email-bot" >> .env
 
       # Persistir los IDs ya notificados entre ejecuciones para no repetir correos.
       # Cada run restaura el cache más reciente y guarda uno nuevo con los IDs actualizados.
@@ -49,3 +51,14 @@ jobs:
           name: cleanup-logs
           path: logs/
           retention-days: 7
+
+      # Subir la BD del chatbot para que el VPS del Telegram pueda descargarla
+      # y conocer los análisis previos del bot de correo.
+      - name: Subir BD del chatbot
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: telegram-bot-db
+          path: data/telegram_bot.db
+          retention-days: 7
+          overwrite: true

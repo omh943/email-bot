@@ -9,6 +9,8 @@ import logging
 import json
 import re
 import sqlite3
+import zipfile
+import io
 from urllib.parse import quote
 import requests
 import threading
@@ -936,6 +938,69 @@ def create_bot_from_env() -> TelegramChatBot:
     return TelegramChatBot(config)
 
 
+def download_latest_db_artifact() -> bool:
+    """Descarga el artifact telegram-bot-db más reciente de GitHub Actions.
+    
+    Permite que el chatbot del VPS conozca los análisis previos del bot de correo
+    (correos UAL/ESI, sin responder, stats, etc.) aunque el bot de correo corra
+    en GitHub Actions (runner efímero).
+    """
+    repo = os.getenv("GITHUB_REPO", "")
+    token = os.getenv("GITHUB_API_TOKEN", "")
+    if not repo or not token:
+        logger.warning("GITHUB_REPO o GITHUB_API_TOKEN no configurados, saltando descarga de BD")
+        return False
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
+
+    try:
+        # Listar artifacts del repositorio
+        resp = requests.get(
+            f"https://api.github.com/repos/{repo}/actions/artifacts",
+            headers=headers, timeout=30
+        )
+        resp.raise_for_status()
+        artifacts = resp.json().get("artifacts", [])
+
+        # Filtrar telegram-bot-db y ordenar por fecha descendente
+        db_artifacts = [a for a in artifacts if a.get("name") == "telegram-bot-db"]
+        if not db_artifacts:
+            logger.warning("No se encontró artifact 'telegram-bot-db' en GitHub Actions")
+            return False
+
+        db_artifacts.sort(key=lambda a: a.get("created_at", ""), reverse=True)
+        latest = db_artifacts[0]
+        artifact_id = latest["id"]
+        download_url = latest.get("archive_download_url") or f"https://api.github.com/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+
+        # Descargar zip del artifact
+        resp = requests.get(download_url, headers=headers, timeout=60)
+        resp.raise_for_status()
+
+        # Extraer telegram_bot.db del zip
+        zip_data = zipfile.ZipFile(io.BytesIO(resp.content))
+        data_dir = Path(__file__).parent.parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        for name in zip_data.namelist():
+            if name.endswith("telegram_bot.db"):
+                target = data_dir / "telegram_bot.db"
+                with zip_data.open(name) as src, open(target, "wb") as dst:
+                    dst.write(src.read())
+                logger.info(f"BD del chatbot descargada: {target} ({target.stat().st_size} bytes)")
+                return True
+
+        logger.warning("No se encontró telegram_bot.db dentro del artifact")
+        return False
+
+    except Exception as e:
+        logger.error(f"Error descargando artifact de BD: {e}")
+        return False
+
+
 def main():
     """Punto de entrada"""
     logging.basicConfig(
@@ -948,6 +1013,10 @@ def main():
     )
     
     try:
+        # Descargar BD más reciente de GitHub Actions (si existe)
+        # así el chatbot conoce análisis previos del bot de correo
+        download_latest_db_artifact()
+
         bot = create_bot_from_env()
         bot.run_polling()
     except KeyboardInterrupt:
