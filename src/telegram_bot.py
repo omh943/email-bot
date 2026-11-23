@@ -16,6 +16,7 @@ import time
 import os
 import signal
 import sys
+import subprocess
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -280,6 +281,7 @@ class TelegramChatBot:
             "/historial": self.cmd_historial,
             "/contexto": self.cmd_contexto,
             "/stats_semana": self.cmd_stats_semana,
+            "/limpiar": self.cmd_limpiar,
         }
         
         # Teclado principal
@@ -290,7 +292,7 @@ class TelegramChatBot:
                 [{"text": "⏳ Sin responder"}, {"text": "🔍 Buscar"}],
                 [{"text": "🕐 Últimos"}, {"text": "🗑️ Promos"}],
                 [{"text": "🛡️ Protegidos"}, {"text": "📜 Historial"}],
-                [{"text": "📊 Semana"}]
+                [{"text": "📊 Semana"}, {"text": "🧹 Limpiar"}]
             ],
             "resize_keyboard": True,
             "one_time_keyboard": False
@@ -409,6 +411,7 @@ class TelegramChatBot:
             "🛡️ Protegidos": "/protegidos",
             "📜 Historial": "/historial",
             "📊 Semana": "/stats_semana",
+            "🧹 Limpiar": "/limpiar",
         }
         
         if text in button_map:
@@ -460,10 +463,31 @@ class TelegramChatBot:
             parse_mode="Markdown",
             chat_id=chat_id
         )
-    
+
+    def _gmail_inline_keyboard(self, emails: List[Dict]) -> Optional[Dict]:
+        """Crea teclado inline con botones 'Abrir en Gmail' para cada correo."""
+        if not emails:
+            return None
+        rows = []
+        for e in emails[:10]:  # Máximo 10 botones por mensaje
+            email_id = e.get("email_id") or e.get("id")
+            if not email_id:
+                continue
+            rows.append([{
+                "text": f"📧 Abrir: {e.get('subject', '(sin asunto)')[:25]}",
+                "url": DigestBuilder._gmail_link(e)
+            }])
+        return {"inline_keyboard": rows} if rows else None
+
+    def _truncate_message(self, text: str, max_len: int = 3800) -> str:
+        """Trunca un mensaje para no exceder el límite de Telegram (4096 chars)."""
+        if len(text) <= max_len:
+            return text
+        return text[:max_len] + "\n\n... (mensaje truncado)"
+
     def _show_category(self, category: str, chat_id: str):
-        """Muestra emails de una categoría"""
-        emails = self.db.get_emails_by_category(category, limit=10)
+        """Muestra emails de una categoría con botones para abrir en Gmail"""
+        emails = self.db.get_emails_by_category(category, limit=20)
         if not emails:
             self.send_message(f"📭 No hay correos en {category}", chat_id=chat_id)
             return
@@ -474,7 +498,9 @@ class TelegramChatBot:
             from_addr = e.get("from_addr", "(desconocido)")[:35]
             text += f"{i}. *{subj}*\n   _{from_addr}_\n\n"
         
-        self.send_message(text, chat_id=chat_id)
+        text = self._truncate_message(text)
+        reply_markup = self._gmail_inline_keyboard(emails[:10])
+        self.send_message(text, chat_id=chat_id, reply_markup=reply_markup)
     
     # ===== COMANDOS =====
     
@@ -497,7 +523,8 @@ class TelegramChatBot:
             "• `/resumen` - Resumen diario\n"
             "• `/estadisticas` - Stats detalladas\n"
             "• `/ultimos` - Última ejecución\n"
-            "• `/stats_semana` - Últimos 7 días\n\n"
+            "• `/stats_semana` - Últimos 7 días\n"
+            "• `/limpiar` - Forzar limpieza de correo ahora\n\n"
             "🏫 **UAL / ESI:**\n"
             "• `/ual` - Correos UAL General\n"
             "• `/esi` - Correos ESI (Ingeniería)\n\n"
@@ -576,10 +603,20 @@ class TelegramChatBot:
         count = stats.get("unreplied_count", 0)
         text = f"⏳ *Sin responder (>3 días): {count}*\n\n"
         
-        emails = self.db.search_emails("", limit=10)  # Placeholder
-        # En producción: filtrar por is_unreplied
+        # Buscar correos reales no UAL/ESI de la caché
+        emails = self.db.get_emails_by_category("other", limit=10)
+        if emails:
+            text += "*Ejemplos recientes:*\n\n"
+            for i, e in enumerate(emails, 1):
+                subj = e.get("subject", "(sin asunto)")[:45]
+                from_addr = e.get("from_addr", "(desconocido)")[:30]
+                text += f"{i}. *{subj}*\n   _{from_addr}_\n\n"
+        else:
+            text += "_Usa /buscar para encontrar específicos_\n"
         
-        self.send_message(text + "\n\n_Usa /buscar para encontrar específicos_", chat_id=chat_id)
+        text = self._truncate_message(text)
+        reply_markup = self._gmail_inline_keyboard(emails[:10]) if emails else None
+        self.send_message(text, chat_id=chat_id, reply_markup=reply_markup)
         return "Sin responder enviado"
     
     def cmd_pendientes(self, args: str, chat_id: str = None) -> str:
@@ -614,7 +651,9 @@ class TelegramChatBot:
             cat = e.get("category", "?")
             text += f"{i}. [{cat}] *{subj}*\n   _{from_addr}_\n\n"
         
-        self.send_message(text, chat_id=chat_id)
+        text = self._truncate_message(text)
+        reply_markup = self._gmail_inline_keyboard(emails[:10])
+        self.send_message(text, chat_id=chat_id, reply_markup=reply_markup)
         return f"Búsqueda: {args}"
     
     def cmd_ultimos(self, args: str, chat_id: str = None) -> str:
@@ -722,6 +761,41 @@ class TelegramChatBot:
         self.send_message(text, chat_id=chat_id)
         return "Stats semana enviadas"
     
+    def cmd_limpiar(self, args: str, chat_id: str = None) -> str:
+        """Fuerza la ejecución del bot de limpieza de correo bajo demanda."""
+        chat_id = chat_id or self.config.chat_id
+        self.send_message("🧹 Ejecutando limpieza de correo... esto puede tardar un par de minutos.", chat_id=chat_id)
+        
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "src.main"],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutos máximo
+                cwd=str(Path(__file__).parent.parent)
+            )
+            
+            if result.returncode == 0:
+                # Extraer líneas clave del log
+                output = result.stdout
+                lines = output.split("\n")
+                key_lines = [l for l in lines if any(k in l for k in [
+                    "Correos encontrados", "UAL/ESI de los últimos", "Enviando resumen",
+                    "finalizado correctamente", "No hay correos"
+                ])]
+                summary = "\n".join(key_lines[:6]) if key_lines else "Limpieza completada sin salida destacada."
+                self.send_message(f"✅ *Limpieza completada*\n\n{summary}", chat_id=chat_id)
+            else:
+                error_tail = result.stderr[-500:] if result.stderr else "Sin detalles de error"
+                self.send_message(f"❌ *Limpieza falló*\n\n`{error_tail}`", chat_id=chat_id)
+                
+        except subprocess.TimeoutExpired:
+            self.send_message("⏱️ La limpieza excedió el tiempo límite (5 min).", chat_id=chat_id)
+        except Exception as e:
+            self.send_message(f"❌ Error ejecutando limpieza: {e}", chat_id=chat_id)
+        
+        return "Limpieza ejecutada"
+    
     # ===== LENGUAJE NATURAL =====
     
     def handle_natural_language(self, text: str, chat_id: str) -> str:
@@ -737,9 +811,10 @@ class TelegramChatBot:
             ("promo", "publicidad", "spam", "basura"): self.cmd_promos,
             ("protegid", "importante", "no borrar"): self.cmd_protegidos,
             ("estadistica", "stats", "números", "numeros"): self.cmd_estadisticas,
-            ("buscar", "encuentra", "busca", "encontrar"): lambda a, c: self.cmd_buscar(text, chat_id),
+            ("buscar", "encuentra", "busca", "encontrar"): lambda a, c: self._handle_buscar_natural(text, chat_id),
             ("historial", "conversaciones", "anterior"): self.cmd_historial,
             ("semana", "7 días", "últimos días"): self.cmd_stats_semana,
+            ("limpiar", "ejecutar", "corre ahora", "haz limpieza"): self.cmd_limpiar,
         }
         
         for keywords, handler in intents.items():
@@ -758,6 +833,18 @@ class TelegramChatBot:
         )
         self.send_message(fallback, chat_id=chat_id)
         return "Fallback enviado"
+    
+    def _handle_buscar_natural(self, text: str, chat_id: str) -> str:
+        """Extrae el término de búsqueda de un mensaje en lenguaje natural."""
+        text_lower = text.lower()
+        # Quitar palabras clave de búsqueda
+        term = text_lower
+        for kw in ["buscar", "encuentra", "busca", "encontrar", "buscar ", "encuentra ", "busca ", "encontrar "]:
+            term = term.replace(kw, " ")
+        term = term.strip()
+        if not term:
+            return self.send_message("🔍 ¿Qué quieres buscar? Ej: `/buscar factura Amazon`", chat_id=chat_id)
+        return self.cmd_buscar(term, chat_id)
     
     def _format_stats(self, stats: Dict, title: str) -> str:
         if title:
