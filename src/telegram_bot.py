@@ -269,10 +269,10 @@ class TelegramChatBot:
             "keyboard": [
                 [{"text": "📊 Resumen"}, {"text": "📈 Estadísticas"}],
                 [{"text": "🏫 UAL"}, {"text": "🏗️ ESI"}],
-                [{"text": "⏳ Sin responder"}, {"text": "📋 Pendientes"}],
-                [{"text": "🔍 Buscar"}, {"text": "🕐 Últimos"}],
-                [{"text": "🗑️ Promos"}, {"text": "🛡️ Protegidos"}],
-                [{"text": "📜 Historial"}, {"text": "📊 Semana"}]
+                [{"text": "⏳ Sin responder"}, {"text": "🔍 Buscar"}],
+                [{"text": "🕐 Últimos"}, {"text": "🗑️ Promos"}],
+                [{"text": "🛡️ Protegidos"}, {"text": "📜 Historial"}],
+                [{"text": "📊 Semana"}]
             ],
             "resize_keyboard": True,
             "one_time_keyboard": False
@@ -385,7 +385,6 @@ class TelegramChatBot:
             "🏫 UAL": "/ual",
             "🏗️ ESI": "/esi",
             "⏳ Sin responder": "/sin_responder",
-            "📋 Pendientes": "/pendientes",
             "🔍 Buscar": "/buscar",
             "🕐 Últimos": "/ultimos",
             "🗑️ Promos": "/promos",
@@ -478,8 +477,7 @@ class TelegramChatBot:
             "• `/ual` - Correos UAL General\n"
             "• `/esi` - Correos ESI (Ingeniería)\n\n"
             "⏳ **Acciones:**\n"
-            "• `/sin_responder` - >3 días sin respuesta\n"
-            "• `/pendientes` - Newsletters/Recibos\n\n"
+            "• `/sin_responder` - >3 días sin respuesta\n\n"
             "🔍 **Búsqueda:**\n"
             "• `/buscar <término>` - Buscar\n"
             "• `/promos` - Promocionales eliminados\n"
@@ -558,24 +556,6 @@ class TelegramChatBot:
         
         self.send_message(text + "\n\n_Usa /buscar para encontrar específicos_", chat_id=chat_id)
         return "Sin responder enviado"
-    
-    def cmd_pendientes(self, args: str, chat_id: str = None) -> str:
-        chat_id = chat_id or self.config.chat_id
-        emails = self.db.get_emails_by_category("newsletter", limit=10)
-        emails += self.db.get_emails_by_category("receipt", limit=10)
-        
-        if not emails:
-            return self.send_message("📭 No hay pendientes de revisión.", chat_id=chat_id)
-        
-        text = f"📋 *Pendientes de revisión ({len(emails)}):*\n\n"
-        for i, e in enumerate(emails[:15], 1):
-            subj = e.get("subject", "(sin asunto)")[:55]
-            cat = e.get("category", "?")
-            from_addr = e.get("from_addr", "(?)")[:35]
-            text += f"{i}. [{cat}] *{subj}*\n   _{from_addr}_\n\n"
-        
-        self.send_message(text, chat_id=chat_id)
-        return "Pendientes enviados"
     
     def cmd_buscar(self, args: str, chat_id: str = None) -> str:
         chat_id = chat_id or self.config.chat_id

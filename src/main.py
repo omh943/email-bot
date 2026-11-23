@@ -102,7 +102,6 @@ def main() -> int:
             "receipts_archived": 0,
             "ual_labeled": 0,
             "esi_labeled": 0,
-            "pending_review": 0,
             "protected_skipped": 0,
             "duplicates_deleted": 0,
             "promos_deleted": 0,
@@ -138,14 +137,6 @@ def main() -> int:
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
-        # Filtrar correos pendientes de revisión
-        pending_review_emails = [
-            email for email in emails
-            if email.get("id") not in processed_ids
-            and any(r["email"]["id"] == email["id"] and "label_pending_review" in r.get("actions", [])
-                    for r in classification_results)
-        ]
-
         # Filtrar correos UAL/ESI para sección especial en digest
         ual_emails = [
             email for email in emails
@@ -159,7 +150,6 @@ def main() -> int:
             logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(pending_review_emails)} pendientes revisión, {len(ual_emails)} UAL/ESI...")
             digest = digest_builder.build_digest(
                 unreplied_emails=unreplied_emails,
-                pending_review_emails=pending_review_emails,
                 ual_emails=ual_emails,
                 stats=action_results,
                 threshold_days=DAYS_THRESHOLD
@@ -168,7 +158,6 @@ def main() -> int:
 
             # Actualizar IDs procesados
             new_processed_ids = {email["id"] for email in unreplied_emails}
-            new_processed_ids.update(email["id"] for email in pending_review_emails)
             new_processed_ids.update(email["id"] for email in ual_emails)
             processed_ids.update(new_processed_ids)
             save_processed_ids(processed_ids)
@@ -180,7 +169,6 @@ def main() -> int:
         if db:
             action_results["generated_at"] = datetime.now().isoformat()
             action_results["unreplied_count"] = len(unreplied_emails)
-            action_results["pending_review_count"] = len(pending_review_emails)
             action_results["ual_count"] = len(ual_emails)
             db.save_daily_stats(action_results)
             logger.info("Stats diarias guardadas en BD")

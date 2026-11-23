@@ -209,11 +209,11 @@
     "@icloud.com"
   ],
   "actions": {
-    "newsletter": "label_pending_review",
-    "receipt": "label_pending_review",
+    "newsletter": "label_and_archive",
+    "receipt": "label_and_archive",
     "unreplied": "notify_only"
   },
-  "confirmation_mode": true,
+  "confirmation_mode": false,
   "ual_filters": {
     "enabled": true,
     "domains": [

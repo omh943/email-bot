@@ -210,10 +210,7 @@ class EmailClassifier:
         else:
             return []
 
-        if self.confirmation_mode:
-            # En modo confirmación: solo etiquetar para revisión manual
-            return [base_action, "label_pending_review"]
-        elif action_config == "label_and_archive":
+        if action_config == "label_and_archive":
             return [base_action, "archive"]
         else:
             return [base_action]

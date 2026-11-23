@@ -305,7 +305,6 @@ class MailClient:
             "receipts_archived": 0,
             "ual_labeled": 0,
             "esi_labeled": 0,
-            "pending_review": 0,
             "protected_skipped": 0,
             "duplicates_deleted": 0,
             "promos_deleted": 0,
@@ -353,9 +352,6 @@ class MailClient:
                     stats["ual_labeled"] += 1
                 if "label_esi" in actions:
                     stats["esi_labeled"] += 1
-                if "label_pending_review" in actions:
-                    stats["pending_review"] += 1
-
             except Exception as e:
                 logger.error(f"Error aplicando acciones a {email_id}: {e}")
                 stats["errors"] += 1
@@ -391,10 +387,6 @@ class MailClient:
             if "archive" in actions:
                 remove_label_ids.append("INBOX")
 
-        # Etiqueta de revisión pendiente (para ambos tipos)
-        if "label_pending_review" in actions:
-            label_ids.append(self._get_or_create_label("Pending_Review"))
-
         if label_ids or remove_label_ids:
             self.service.users().messages().modify(
                 userId="me",
@@ -417,13 +409,6 @@ class MailClient:
             # Mover correo
             self.imap_conn.copy(email_id, folder)
             self.imap_conn.store(email_id, "+FLAGS", "\\Deleted")
-
-        # Carpeta de revisión pendiente
-        if "label_pending_review" in actions:
-            folder = "INBOX/Pending_Review"
-            self.imap_conn.create(folder)
-            self.imap_conn.copy(email_id, folder)
-            # No eliminar de INBOX en modo confirmación, solo copiar
 
         # Expulsar eliminados
         self.imap_conn.expunge()

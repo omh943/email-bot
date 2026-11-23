@@ -65,15 +65,12 @@ class DigestBuilder:
         unreplied_emails: List[Dict],
         stats: Dict[str, int],
         threshold_days: int,
-        pending_review_emails: List[Dict] = None,
         ual_emails: List[Dict] = None
     ) -> Dict[str, Any]:
         """
         Construye el resumen completo.
         Retorna dict con subject, text_body, html_body.
         """
-        if pending_review_emails is None:
-            pending_review_emails = []
         if ual_emails is None:
             ual_emails = []
             
@@ -100,15 +97,6 @@ class DigestBuilder:
             text_parts.append("\n✅ No hay correos sin responder pendientes.")
             html_parts.append("<p style='color: green;'>✅ No hay correos sin responder pendientes.</p>")
 
-        # Correos pendientes de revisión
-        max_pending = self.digest_config.get("max_pending_review_shown", 30)
-        if pending_review_emails:
-            text_parts.append(self._build_text_pending_review(pending_review_emails, max_pending))
-            html_parts.append(self._build_html_pending_review(pending_review_emails, max_pending))
-        elif self.digest_config.get("include_pending_review_list", True):
-            text_parts.append("\n✅ No hay correos pendientes de revisión.")
-            html_parts.append("<p style='color: green;'>✅ No hay correos pendientes de revisión.</p>")
-
         # Correos UAL/ESI (con secciones colapsables)
         max_ual = self.digest_config.get("max_ual_shown", 50)
         if ual_emails:
@@ -132,10 +120,8 @@ class DigestBuilder:
             "generated_at": datetime.now().isoformat(),
             "stats": stats,
             "unreplied_count": len(unreplied_emails),
-            "pending_review_count": len(pending_review_emails),
             "ual_count": len(ual_emails),
-            "ual_emails": ual_emails,
-            "pending_review_emails": pending_review_emails
+            "ual_emails": ual_emails
         }
 
     def _build_text_header(self, date_str: str, stats: Dict, threshold_days: int) -> str:
@@ -162,7 +148,6 @@ class DigestBuilder:
         lines.append(f"  📦 Newsletters archivadas:     {stats.get('newsletters_archived', 0)}")
         lines.append(f"  🧾 Recibos etiquetados:        {stats.get('receipts_labeled', 0)}")
         lines.append(f"  📁 Recibos archivados:         {stats.get('receipts_archived', 0)}")
-        lines.append(f"  ⏳ Pendientes de revisión:       {stats.get('pending_review', 0)}")
         lines.append(f"  🛡️ Protegidos (no tocados):      {stats.get('protected_skipped', 0)}")
         if stats.get('errors', 0):
             lines.append(f"  ⚠️ Errores:                    {stats.get('errors', 0)}")
@@ -174,7 +159,6 @@ class DigestBuilder:
             ("📦 Newsletters archivadas", stats.get('newsletters_archived', 0)),
             ("🧾 Recibos etiquetados", stats.get('receipts_labeled', 0)),
             ("📁 Recibos archivados", stats.get('receipts_archived', 0)),
-            ("⏳ Pendientes de revisión", stats.get('pending_review', 0)),
             ("🛡️ Protegidos (no tocados)", stats.get('protected_skipped', 0)),
         ]
         if stats.get('errors', 0):
@@ -273,23 +257,6 @@ class DigestBuilder:
             lines.append(f"\n... y {len(emails) - max_shown} correos más.")
 
         return "\n".join(lines)
-
-    def _build_html_pending_review(self, emails: List[Dict], max_shown: int) -> str:
-        shown = emails[:max_shown]
-        rows = "".join(self._email_row_html(i, email) for i, email in enumerate(shown, 1))
-
-        more = ""
-        if len(emails) > max_shown:
-            more = f"<p style='color: #888; font-size: 13px; margin-top: 12px;'>... y {len(emails) - max_shown} correos más.</p>"
-
-        return f"""
-        <h2 style="color: #333; border-bottom: 2px solid #8b5cf6; padding-bottom: 8px;">⏳ Pendientes de Revisión (Newsletters/Recibos)</h2>
-        <p style="font-size: 12px; color: #888; margin-bottom: 8px;">💡 Click en el asunto para abrir en Gmail</p>
-        <table style="width: 100%; border-collapse: collapse; margin-bottom: 12px;">
-            {rows}
-        </table>
-        {more}
-"""
 
     def _build_text_ual(self, emails: List[Dict], max_shown: int) -> str:
         # Separar UAL general y ESI usando la categoría asignada por el clasificador
@@ -465,15 +432,6 @@ https://github.com/tu-usuario/email-cleaner-bot
                 lines.append(f"  ... y {unreplied_count - 5} más")
         else:
             lines.append("✅ *No hay correos sin responder pendientes*")
-
-        if pending_count > 0:
-            lines.append("")
-            lines.append(f"📋 *{pending_count} pendientes de revisión:*")
-            for i, email in enumerate(digest.get("pending_review_emails", [])[:5], 1):
-                subject = email.get("subject", "(sin asunto)")[:60]
-                lines.append(f"  {i}. {subject}")
-            if pending_count > 5:
-                lines.append(f"  ... y {pending_count - 5} más")
 
         if ual_count > 0:
             lines.append("")
