@@ -5,7 +5,7 @@ Conecta, lee, aplica reglas y envía el resumen.
 import sys
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any
 
@@ -49,6 +49,8 @@ def main() -> int:
     logger.info("Iniciando Email Cleaner Bot")
     logger.info("=" * 60)
 
+    mail_client = None
+    exit_code = 0
     try:
         # Validar configuración
         validate_config()
@@ -96,44 +98,38 @@ def main() -> int:
             db.cache_emails(enriched_emails)
             logger.info(f"Emails cacheados en BD: {len(enriched_emails)}")
 
-        # Inicializar stats
-        action_results = {
-            "newsletters_labeled": 0,
-            "newsletters_archived": 0,
-            "receipts_labeled": 0,
-            "receipts_archived": 0,
-            "ual_labeled": 0,
-            "esi_labeled": 0,
-            "protected_skipped": 0,
-            "duplicates_deleted": 0,
-            "promos_deleted": 0,
-            "errors": 0
-        }
-
-        # Detectar y eliminar duplicados promocionales
-        duplicates = []
+        # --- Eliminaciones (promos y duplicados) ANTES de etiquetar/archivar ---
+        # Se calculan sobre la lista original y se quitan de todo lo demás para no
+        # notificar, etiquetar ni guardar en el dataset correos que ya están en la papelera.
+        to_delete: Dict[str, str] = {}  # id -> motivo
+        if classifier.auto_del_enabled:
+            logger.info("Detectando correos promocionales de organizaciones para eliminar...")
+            for e in classifier.find_promos_to_delete(emails):
+                to_delete[e["id"]] = "promo"
         if classifier.dup_enabled:
             logger.info("Detectando duplicados promocionales...")
-            duplicates = classifier.find_duplicates(emails)
-            if duplicates:
-                logger.info(f"Eliminando {len(duplicates)} duplicados promocionales...")
-                duplicate_ids = [d["id"] for d in duplicates]
-                deleted = mail_client.delete_emails(duplicate_ids)
-                action_results["duplicates_deleted"] = deleted
-                logger.info(f"Duplicados eliminados: {deleted}")
-                emails = [e for e in emails if e["id"] not in duplicate_ids]
+            remaining = [e for e in emails if e["id"] not in to_delete]
+            for e in classifier.find_duplicates(remaining):
+                to_delete[e["id"]] = "duplicate"
 
-        # Filtrar classification_results para quitar emails ya borrados como duplicados
-        duplicate_ids = {d["id"] for d in duplicates}
-        if duplicate_ids:
+        promos_deleted = duplicates_deleted = 0
+        if to_delete:
+            logger.info(f"Moviendo a la papelera {len(to_delete)} correos promocionales/duplicados...")
+            promo_ids = [i for i, why in to_delete.items() if why == "promo"]
+            dup_ids = [i for i, why in to_delete.items() if why == "duplicate"]
+            promos_deleted = mail_client.delete_emails(promo_ids)
+            duplicates_deleted = mail_client.delete_emails(dup_ids)
+            logger.info(f"Eliminados: {promos_deleted} promos, {duplicates_deleted} duplicados")
+            emails = [e for e in emails if e["id"] not in to_delete]
             classification_results = [
-                r for r in classification_results
-                if r["email"]["id"] not in duplicate_ids
+                r for r in classification_results if r["email"]["id"] not in to_delete
             ]
 
-        # Aplicar acciones (etiquetar, archivar, auto-eliminar promos)
+        # Aplicar acciones (etiquetar, archivar)
         logger.info("Aplicando acciones...")
-        action_results = mail_client.apply_actions(classification_results, emails, classifier)
+        action_results = mail_client.apply_actions(classification_results)
+        action_results["promos_deleted"] = promos_deleted
+        action_results["duplicates_deleted"] = duplicates_deleted
 
         # Categoría asignada a cada correo (necesaria para separar UAL y ESI en el digest)
         category_by_id = {
@@ -149,7 +145,7 @@ def main() -> int:
             and classifier.is_unreplied(email, DAYS_THRESHOLD)
         ]
 
-        # Filtrar correos UAL/ESI para sección especial en digest (máx. 14 días de antigüedad)
+        # Filtrar correos UAL/ESI para sección especial en digest (máx. N días de antigüedad)
         ual_emails = []
         for email in emails:
             if email.get("id") in processed_ids:
@@ -172,25 +168,26 @@ def main() -> int:
             f"{ual_count} UAL, {esi_count} ESI"
         )
 
-        # Construir y enviar resumen (siempre enviar si hay algo que reportar)
-        if unreplied_emails or ual_emails:
-            logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(ual_emails)} UAL/ESI...")
-            digest = digest_builder.build_digest(
-                unreplied_emails=unreplied_emails,
-                ual_emails=ual_emails,
-                stats=action_results,
-                threshold_days=DAYS_THRESHOLD
-            )
-            mail_client.send_digest(digest)
+        # Construir y enviar el resumen SIEMPRE (también los días sin pendientes),
+        # para que su ausencia signifique que algo ha fallado.
+        logger.info(f"Enviando resumen: {len(unreplied_emails)} sin responder, {len(ual_emails)} UAL/ESI...")
+        digest = digest_builder.build_digest(
+            unreplied_emails=unreplied_emails,
+            ual_emails=ual_emails,
+            stats=action_results,
+            threshold_days=DAYS_THRESHOLD
+        )
+        digest_sent = mail_client.send_digest(digest)
 
-            # Actualizar IDs procesados
-            new_processed_ids = {email["id"] for email in unreplied_emails}
-            new_processed_ids.update(email["id"] for email in ual_emails)
-            processed_ids.update(new_processed_ids)
+        if digest_sent:
+            # Solo se marcan como notificados si el resumen llegó a algún sitio
+            processed_ids.update(email["id"] for email in unreplied_emails)
+            processed_ids.update(email["id"] for email in ual_emails)
             save_processed_ids(processed_ids)
             logger.info(f"IDs procesados actualizados: {len(processed_ids)} total")
         else:
-            logger.info("No hay correos sin responder ni UAL/ESI para notificar")
+            logger.error("No se pudo enviar el resumen ni por correo ni por Telegram")
+            exit_code = 1
 
         # Guardar stats en BD para chatbot
         if db:
@@ -208,17 +205,21 @@ def main() -> int:
             json.dump(dataset, f, ensure_ascii=False, indent=2)
         logger.info(f"Dataset guardado: {dataset_path} ({len(dataset['emails'])} correos)")
 
-        # Cerrar conexión
-        mail_client.disconnect()
-
         logger.info("=" * 60)
-        logger.info("Email Cleaner Bot finalizado correctamente")
+        if exit_code == 0:
+            logger.info("Email Cleaner Bot finalizado correctamente")
+        else:
+            logger.info("Email Cleaner Bot finalizado CON ERRORES")
         logger.info("=" * 60)
-        return 0
+        return exit_code
 
     except Exception as e:
         logger.exception(f"Error crítico en la ejecución: {e}")
         return 1
+
+    finally:
+        if mail_client is not None:
+            mail_client.disconnect()
 
 
 def _build_dataset(emails: List[Dict], classification_results: List[Dict],
@@ -231,8 +232,7 @@ def _build_dataset(emails: List[Dict], classification_results: List[Dict],
     for email in emails:
         eid = email.get("id", "")
         category = category_by_action.get(eid, category_by_id.get(eid, "other"))
-        msg_id = DigestBuilder._message_id(email)
-        gmail_link = DigestBuilder._gmail_link(email) if msg_id else f"https://mail.google.com/mail/u/0/#search/from:{email.get('from','')}"
+        gmail_link = DigestBuilder._gmail_link(email)
 
         dataset_emails.append({
             "id": eid,

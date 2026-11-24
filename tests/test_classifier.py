@@ -292,3 +292,39 @@ def run_all_tests():
 if __name__ == "__main__":
     success = run_all_tests()
     sys.exit(0 if success else 1)
+
+def _real_classifier():
+    rules_path = Path(__file__).parent.parent / "config" / "rules.json"
+    with open(rules_path, encoding="utf-8") as f:
+        return EmailClassifier(json.load(f))
+
+
+def test_promos_never_delete_ual():
+    """Un correo de la UAL con palabras promocionales nunca debe ir a la papelera."""
+    classifier = _real_classifier()
+    emails = [
+        {"id": "1", "subject": "Oferta de cursos de verano", "from": "Info UAL <noreply@ual.es>",
+         "body": "", "date": "Mon, 23 Nov 2026 10:00:00 +0000", "labels": []},
+        {"id": "2", "subject": "Oferta exclusiva: 50% descuento", "from": "Tienda <marketing@tienda.com>",
+         "body": "", "date": "Mon, 23 Nov 2026 10:00:00 +0000", "labels": []},
+    ]
+    ids = {e["id"] for e in classifier.find_promos_to_delete(emails)}
+    assert "1" not in ids
+    assert "2" in ids
+
+
+def test_duplicates_only_same_sender():
+    """Asuntos parecidos de remitentes distintos NO son duplicados."""
+    classifier = _real_classifier()
+    classifier.dup_enabled = True
+    base = {"body": "", "labels": []}
+    emails = [
+        {**base, "id": "1", "subject": "Tu pedido ha sido enviado", "from": "noreply@tiendaA.com",
+         "date": "Mon, 23 Nov 2026 10:00:00 +0000"},
+        {**base, "id": "2", "subject": "Tu pedido ha sido enviado", "from": "noreply@tiendaB.com",
+         "date": "Mon, 23 Nov 2026 09:00:00 +0000"},
+        {**base, "id": "3", "subject": "Tu pedido ha sido enviado!", "from": "noreply@tiendaA.com",
+         "date": "Sun, 22 Nov 2026 09:00:00 +0000"},
+    ]
+    ids = {e["id"] for e in classifier.find_duplicates(emails)}
+    assert ids == {"3"}

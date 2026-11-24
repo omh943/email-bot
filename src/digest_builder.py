@@ -2,6 +2,7 @@
 Constructor de resúmenes (digest) de correos.
 Genera versiones HTML y texto plano para envío por correo o Telegram.
 """
+import html
 import logging
 import re
 from datetime import datetime, timedelta
@@ -77,7 +78,7 @@ class DigestBuilder:
         try:
             dt = parsedate_to_datetime(date_str)
             if dt.tzinfo:
-                dt = dt.replace(tzinfo=None)
+                dt = dt.astimezone().replace(tzinfo=None)  # a hora local, sin zona
             return dt
         except Exception:
             return datetime.min
@@ -92,8 +93,8 @@ class DigestBuilder:
 
     def _email_row_html(self, i: int, email: Dict, show_gmail_link: bool = True) -> str:
         """Genera fila HTML para un correo con link a Gmail"""
-        subject = email.get("subject", "(sin asunto)")
-        from_addr = email.get("from", "(desconocido)")
+        subject = html.escape(email.get("subject") or "(sin asunto)")
+        from_addr = html.escape(email.get("from") or "(desconocido)")
         date_str = email.get("date", "")
 
         try:
@@ -105,7 +106,7 @@ class DigestBuilder:
         except Exception:
             date_fmt = "Fecha inválida"
 
-        gmail_url = self._gmail_link(email) if show_gmail_link else "#"
+        gmail_url = html.escape(self._gmail_link(email), quote=True) if show_gmail_link else "#"
         link_attr = f'href="{gmail_url}" target="_blank" style="color: #0066cc; text-decoration: none;"' if show_gmail_link else 'style="color: #333;"'
 
         return f"""
@@ -180,6 +181,7 @@ class DigestBuilder:
             "html_body": html_body,
             "generated_at": datetime.now().isoformat(),
             "stats": stats,
+            "threshold_days": threshold_days,
             "unreplied_count": len(unreplied_emails),
             "unreplied_emails": unreplied_emails,
             "ual_count": len(ual_emails),
@@ -211,6 +213,7 @@ class DigestBuilder:
         lines.append(f"  🧾 Recibos etiquetados:        {stats.get('receipts_labeled', 0)}")
         lines.append(f"  📁 Recibos archivados:         {stats.get('receipts_archived', 0)}")
         lines.append(f"  🛡️ Protegidos (no tocados):      {stats.get('protected_skipped', 0)}")
+        lines.append(f"  🗑️ Promos/duplicados a papelera: {stats.get('promos_deleted', 0) + stats.get('duplicates_deleted', 0)}")
         if stats.get('errors', 0):
             lines.append(f"  ⚠️ Errores:                    {stats.get('errors', 0)}")
         return "\n".join(lines)
@@ -222,6 +225,7 @@ class DigestBuilder:
             ("🧾 Recibos etiquetados", stats.get('receipts_labeled', 0)),
             ("📁 Recibos archivados", stats.get('receipts_archived', 0)),
             ("🛡️ Protegidos (no tocados)", stats.get('protected_skipped', 0)),
+            ("🗑️ Promos/duplicados a papelera", stats.get('promos_deleted', 0) + stats.get('duplicates_deleted', 0)),
         ]
         if stats.get('errors', 0):
             items.append(("⚠️ Errores", stats.get('errors', 0)))
@@ -416,7 +420,6 @@ class DigestBuilder:
         return """
 ═══════════════════════════════════════════════════════════
 Generado automáticamente por Email Cleaner Bot
-https://github.com/tu-usuario/email-cleaner-bot
 """
 
     def _build_html_footer(self) -> str:
@@ -427,6 +430,13 @@ https://github.com/tu-usuario/email-cleaner-bot
 </div>
 </div>
 """
+
+    @staticmethod
+    def _md(text: str) -> str:
+        """Escapa caracteres especiales del Markdown (legacy) de Telegram."""
+        for ch in ("_", "*", "`", "["):
+            text = text.replace(ch, "\\" + ch)
+        return text
 
     def build_telegram_message(self, digest: Dict) -> str:
         """Construye mensaje optimizado para Telegram (Markdown)"""
@@ -442,6 +452,7 @@ https://github.com/tu-usuario/email-cleaner-bot
             f"  🧾 Recibos: {stats.get('receipts_labeled', 0)} etiquetados, {stats.get('receipts_archived', 0)} archivados",
             f"  🏫 UAL/ESI: {stats.get('ual_labeled', 0)} UAL, {stats.get('esi_labeled', 0)} ESI",
             f"  🛡️ Protegidos: {stats.get('protected_skipped', 0)}",
+            f"  🗑️ Promos eliminadas: {stats.get('promos_deleted', 0)}",
             f"  🗑️ Duplicados eliminados: {stats.get('duplicates_deleted', 0)}",
         ]
 
@@ -450,9 +461,10 @@ https://github.com/tu-usuario/email-cleaner-bot
 
         lines.append("")
         if unreplied_count > 0:
-            lines.append(f"⏳ *{unreplied_count} correos sin responder (>3 días):*")
+            threshold = digest.get("threshold_days", 3)
+            lines.append(f"⏳ *{unreplied_count} correos sin responder (>{threshold} días):*")
             for i, email in enumerate(digest.get("unreplied_emails", [])[:5], 1):
-                subject = email.get("subject", "(sin asunto)")[:60]
+                subject = self._md((email.get("subject") or "(sin asunto)")[:60])
                 lines.append(f"  {i}. {subject}")
             if unreplied_count > 5:
                 lines.append(f"  ... y {unreplied_count - 5} más")
@@ -469,7 +481,7 @@ https://github.com/tu-usuario/email-cleaner-bot
             lines.append(f"  📍 UAL General: {ual_general_count}")
             lines.append(f"  🏗️ ESI: {esi_count}")
             for i, email in enumerate(ual_emails[:5], 1):
-                subject = email.get("subject", "(sin asunto)")[:60]
+                subject = self._md((email.get("subject") or "(sin asunto)")[:60])
                 lines.append(f"  {i}. {subject}")
             if ual_count > 5:
                 lines.append(f"  ... y {ual_count - 5} más")

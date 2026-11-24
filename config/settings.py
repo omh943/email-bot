@@ -65,19 +65,33 @@ def load_rules() -> dict:
         return json.load(f)
 
 
+# Esquema de los IDs guardados. Antes, con IMAP se guardaban números de secuencia
+# (cambian cada vez que se borra un correo); ahora se guardan UIDs, que son estables.
+# Si el fichero tiene otro esquema se descarta para no mezclar IDs incompatibles.
+PROCESSED_IDS_SCHEME = "imap_uid" if USE_IMAP else "gmail_api_id"
+
+
 def load_processed_ids() -> set:
     """Carga los IDs de correos ya procesados"""
-    if PROCESSED_IDS_FILE.exists():
+    if not PROCESSED_IDS_FILE.exists():
+        return set()
+    try:
         with open(PROCESSED_IDS_FILE, "r", encoding="utf-8") as f:
-            return set(json.load(f))
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if isinstance(data, dict) and data.get("scheme") == PROCESSED_IDS_SCHEME:
+        return set(str(i) for i in data.get("ids", []))
+    # Formato antiguo (lista de números de secuencia IMAP) u otro esquema: no es fiable
     return set()
 
 
 def save_processed_ids(processed_ids: set) -> None:
     """Guarda los IDs de correos procesados"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+    data = {"scheme": PROCESSED_IDS_SCHEME, "ids": sorted(processed_ids)}
     with open(PROCESSED_IDS_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(processed_ids), f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 def validate_config() -> bool:

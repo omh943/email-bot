@@ -2,8 +2,16 @@ name: Daily Email Cleanup
 
 on:
   schedule:
-    - cron: '0 8 * * *'
+    # 07:41 UTC = 08:41 Madrid (invierno) / 09:41 (verano).
+    # No usar el minuto 0: a las en punto GitHub tiene picos de carga y retrasa
+    # o descarta ejecuciones programadas (el '0 8 * * *' nunca llegó a dispararse).
+    - cron: '41 7 * * *'
   workflow_dispatch:
+
+# Evita dos ejecuciones a la vez (p. ej. la programada y una manual)
+concurrency:
+  group: daily-email-cleanup
+  cancel-in-progress: false
 
 jobs:
   cleanup:

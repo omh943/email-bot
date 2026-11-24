@@ -8,6 +8,7 @@ import base64
 import logging
 import imaplib
 import email
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.header import decode_header, make_header
@@ -188,29 +189,49 @@ class MailClient:
         return emails
 
     def _fetch_imap(self, days_back: int, max_results: int) -> List[Dict[str, Any]]:
-        """Obtiene correos via IMAP"""
+        """
+        Obtiene correos via IMAP usando UIDs (estables entre sesiones y tras EXPUNGE).
+
+        - Se usa BODY.PEEK[] en lugar de RFC822 para NO marcar los correos como leídos.
+        - Se descargan en lotes para no hacer una petición por correo (mucho más rápido).
+        """
         since_date = (datetime.now() - timedelta(days=days_back)).strftime("%d-%b-%Y")
-        status, messages = self.imap_conn.search(None, f'(SINCE "{since_date}")')
+        status, messages = self.imap_conn.uid("SEARCH", None, f'(SINCE "{since_date}")')
 
         if status != "OK":
             logger.error("Error buscando correos IMAP")
             return []
 
-        email_ids = messages[0].split()[-max_results:]  # Los más recientes
+        uids = messages[0].split()[-max_results:]  # Los más recientes
         emails = []
+        batch_size = 50
 
-        for eid in reversed(email_ids):  # Procesar del más nuevo al más viejo
+        for start in range(0, len(uids), batch_size):
+            batch = uids[start:start + batch_size]
+            uid_set = b",".join(batch).decode()
             try:
-                status, msg_data = self.imap_conn.fetch(eid, "(RFC822)")
-                if status != "OK":
-                    continue
-
-                raw_email = msg_data[0][1]
-                parsed = self._parse_imap_message(eid.decode(), raw_email)
-                emails.append(parsed)
+                status, msg_data = self.imap_conn.uid("FETCH", uid_set, "(UID BODY.PEEK[])")
             except Exception as e:
-                logger.warning(f"Error parseando correo {eid}: {e}")
+                logger.warning(f"Error descargando lote IMAP {uid_set[:40]}...: {e}")
+                continue
+            if status != "OK":
+                logger.warning(f"Respuesta IMAP no OK descargando lote: {status}")
+                continue
 
+            for item in msg_data:
+                if not isinstance(item, tuple) or len(item) < 2:
+                    continue
+                match = re.search(rb"UID (\d+)", item[0])
+                if not match:
+                    continue
+                uid = match.group(1).decode()
+                try:
+                    emails.append(self._parse_imap_message(uid, item[1]))
+                except Exception as e:
+                    logger.warning(f"Error parseando correo UID {uid}: {e}")
+
+        # Del más nuevo al más viejo (UID mayor = llegó más tarde)
+        emails.sort(key=lambda e: int(e["id"]), reverse=True)
         return emails
 
     def _parse_gmail_message(self, msg: Dict) -> Dict[str, Any]:
@@ -262,6 +283,18 @@ class MailClient:
                     return base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
         return ""
 
+    @staticmethod
+    def _decode_part(part) -> str:
+        """Decodifica una parte MIME respetando su charset (vacío si no tiene payload)."""
+        payload = part.get_payload(decode=True)
+        if not payload:
+            return ""
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            return payload.decode(charset, errors="ignore")
+        except LookupError:
+            return payload.decode("utf-8", errors="ignore")
+
     def _parse_imap_message(self, msg_id: str, raw_email: bytes) -> Dict[str, Any]:
         """Parsea un mensaje IMAP"""
         msg = email.message_from_bytes(raw_email)
@@ -271,12 +304,12 @@ class MailClient:
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    body = self._decode_part(part)
                     break
                 elif part.get_content_type() == "text/html" and not body:
-                    body = part.get_payload(decode=True).decode("utf-8", errors="ignore")
+                    body = self._decode_part(part)
         else:
-            body = msg.get_payload(decode=True).decode("utf-8", errors="ignore")
+            body = self._decode_part(msg)
 
         # Decodificar cabeceras RFC 2047
         subject = self._decode_header(msg.get("Subject", ""))
@@ -296,8 +329,8 @@ class MailClient:
             "raw_headers": dict(msg.items())
         }
 
-    def apply_actions(self, classification_results: List[Dict], all_emails: List[Dict] = None, classifier=None) -> Dict[str, int]:
-        """Aplica acciones de etiquetado, archivado y auto-eliminación de promos"""
+    def apply_actions(self, classification_results: List[Dict]) -> Dict[str, int]:
+        """Aplica acciones de etiquetado y archivado (la eliminación de promos se hace en main)"""
         stats = {
             "newsletters_labeled": 0,
             "newsletters_archived": 0,
@@ -310,18 +343,6 @@ class MailClient:
             "promos_deleted": 0,
             "errors": 0
         }
-
-        # Auto-eliminar correos promocionales de organizaciones
-        if classifier and all_emails:
-            logger.info("Detectando correos promocionales de organizaciones para eliminar...")
-            promos_to_delete = classifier.find_promos_to_delete(all_emails)
-            if promos_to_delete:
-                promo_ids = [p["id"] for p in promos_to_delete]
-                deleted = self.delete_emails(promo_ids)
-                stats["promos_deleted"] = deleted
-                logger.info(f"Promocionales de organizaciones eliminados: {deleted}")
-                # Remover de la lista para no procesarlos
-                all_emails = [e for e in all_emails if e["id"] not in promo_ids]
 
         for result in classification_results:
             email_id = result["email"]["id"]
@@ -355,6 +376,13 @@ class MailClient:
             except Exception as e:
                 logger.error(f"Error aplicando acciones a {email_id}: {e}")
                 stats["errors"] += 1
+
+        # IMAP: expulsar los marcados como eliminados una sola vez al final
+        if self.imap_conn:
+            try:
+                self.imap_conn.expunge()
+            except Exception as e:
+                logger.warning(f"Error en EXPUNGE: {e}")
 
         return stats
 
@@ -395,7 +423,7 @@ class MailClient:
             ).execute()
 
     def _apply_actions_imap(self, email_id: str, category: str, actions: List[str]) -> None:
-        """Aplica acciones via IMAP (limitado: solo mover a carpetas)"""
+        """Aplica acciones via IMAP (limitado: solo mover a carpetas). email_id es un UID."""
         # IMAP no soporta etiquetas nativas como Gmail, usamos carpetas
         folder_map = {
             "newsletter": "INBOX/Newsletter",
@@ -404,14 +432,23 @@ class MailClient:
 
         if category in folder_map and "archive" in actions:
             folder = folder_map[category]
-            # Crear carpeta si no existe
-            self.imap_conn.create(folder)
-            # Mover correo
-            self.imap_conn.copy(email_id, folder)
-            self.imap_conn.store(email_id, "+FLAGS", "\\Deleted")
+            self._ensure_imap_folder(folder)
+            status, _ = self.imap_conn.uid("COPY", email_id, folder)
+            if status != "OK":
+                raise RuntimeError(f"No se pudo copiar UID {email_id} a {folder}")
+            # Quitar de INBOX (en Gmail: archivar). El EXPUNGE se hace al final.
+            self.imap_conn.uid("STORE", email_id, "+FLAGS", "(\\Deleted)")
 
-        # Expulsar eliminados
-        self.imap_conn.expunge()
+    def _ensure_imap_folder(self, folder: str) -> None:
+        """Crea la carpeta IMAP una sola vez por ejecución"""
+        if not hasattr(self, "_imap_folders_ready"):
+            self._imap_folders_ready = set()
+        if folder not in self._imap_folders_ready:
+            try:
+                self.imap_conn.create(folder)  # Si ya existe devuelve NO, no pasa nada
+            except Exception:
+                pass
+            self._imap_folders_ready.add(folder)
 
     def delete_emails(self, email_ids: List[str]) -> int:
         """Elimina emails permanentemente (mueve a papelera)"""
@@ -430,11 +467,19 @@ class MailClient:
                     except Exception as e:
                         logger.error(f"Error eliminando email {email_id}: {e}")
             else:
-                # IMAP: marcar como eliminados
+                # IMAP (UIDs): en Gmail se mueve a la Papelera añadiendo la etiqueta \Trash
+                # (con \Deleted+EXPUNGE Gmail solo lo archivaría); en otros servidores se marca borrado.
+                is_gmail = "gmail" in IMAP_SERVER.lower()
                 for email_id in email_ids:
                     try:
-                        self.imap_conn.store(email_id, "+FLAGS", "\\Deleted")
-                        deleted += 1
+                        if is_gmail:
+                            status, _ = self.imap_conn.uid("STORE", email_id, "+X-GM-LABELS", "(\\Trash)")
+                        else:
+                            status, _ = self.imap_conn.uid("STORE", email_id, "+FLAGS", "(\\Deleted)")
+                        if status == "OK":
+                            deleted += 1
+                        else:
+                            logger.error(f"El servidor rechazó eliminar UID {email_id}: {status}")
                     except Exception as e:
                         logger.error(f"Error eliminando email {email_id}: {e}")
                 self.imap_conn.expunge()
@@ -455,7 +500,7 @@ class MailClient:
             else:
                 email_sent = self._send_digest_imap(digest)
         except Exception as e:
-            logger.error(f"Error enviando resumen por email: {e}")
+            logger.exception(f"Error enviando resumen por email: {e}")
         
         # Enviar por Telegram si hay webhook configurado
         if TELEGRAM_WEBHOOK:
@@ -499,7 +544,13 @@ class MailClient:
                 "disable_web_page_preview": True
             }
             
-            response = requests.post(f"{base_url}/sendMessage", json=payload, timeout=10)
+            response = requests.post(f"{base_url}/sendMessage", json=payload, timeout=15)
+            if response.status_code == 400:
+                # Markdown inválido (p. ej. un asunto con caracteres raros): reintentar en texto plano
+                logger.warning(f"Telegram rechazó el Markdown ({response.text[:200]}), reintentando en texto plano")
+                payload.pop("parse_mode", None)
+                payload["text"] = message.replace("*", "").replace("\\", "")
+                response = requests.post(f"{base_url}/sendMessage", json=payload, timeout=15)
             response.raise_for_status()
             
             logger.info("Resumen enviado via Telegram")
@@ -543,7 +594,7 @@ class MailClient:
         message.attach(MIMEText(digest["text_body"], "plain", "utf-8"))
         message.attach(MIMEText(digest["html_body"], "html", "utf-8"))
 
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
+        with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
             server.starttls()
             server.login(EMAIL_USER, EMAIL_APP_PASSWORD)
             server.send_message(message)

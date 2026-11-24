@@ -200,6 +200,13 @@ class EmailClassifier:
 
         return None
 
+    def _is_untouchable(self, email: Dict) -> bool:
+        """True si el correo es UAL/ESI o de un remitente protegido (no se borra nunca)."""
+        from_addr = (email.get("from") or "").lower()
+        if self.ual_enabled and self._classify_ual("", from_addr, ""):
+            return True
+        return self._is_protected_sender(from_addr)
+
     def _is_protected_sender(self, from_addr: str) -> bool:
         """True si el remitente está en la lista de remitentes protegidos."""
         for pattern in self.protected_sender_patterns:
@@ -359,7 +366,7 @@ class EmailClassifier:
                 email_date = parsedate_to_datetime(date_str)
                 # Hacer timezone-naive para comparación
                 if email_date.tzinfo:
-                    email_date = email_date.replace(tzinfo=None)
+                    email_date = email_date.astimezone().replace(tzinfo=None)
                 now = datetime.now()
                 days_old = (now - email_date).days
                 if days_old < threshold_days:
@@ -402,8 +409,9 @@ class EmailClassifier:
         for email in emails:
             from_addr = email.get("from", "").lower()
             is_promo = any(sender in from_addr for sender in self.dup_promo_senders)
-            if is_promo:
-                promo_emails.append(email)
+            if not is_promo or self._is_untouchable(email):
+                continue
+            promo_emails.append(email)
         
         if len(promo_emails) < 2:
             return []
@@ -424,22 +432,23 @@ class EmailClassifier:
         promo_emails.sort(key=get_date, reverse=True)
         
         to_delete = []
-        seen_subjects = []
-        
+        # Asuntos ya vistos por remitente: solo es duplicado si lo manda el MISMO remitente
+        seen_subjects: Dict[str, List[str]] = {}
+
         for email in promo_emails:
             subject = email.get("subject", "").lower()
-            is_duplicate = False
-            
-            for seen_subject in seen_subjects:
-                similarity = SequenceMatcher(None, subject, seen_subject).ratio()
-                if similarity >= self.dup_threshold:
-                    is_duplicate = True
-                    break
-            
+            addresses = self._ADDRESS_RE.findall(email.get("from", "").lower())
+            sender = addresses[0] if addresses else email.get("from", "").lower()
+            sender_seen = seen_subjects.setdefault(sender, [])
+            is_duplicate = any(
+                SequenceMatcher(None, subject, seen).ratio() >= self.dup_threshold
+                for seen in sender_seen
+            )
+
             if is_duplicate:
                 to_delete.append(email)
             else:
-                seen_subjects.append(subject)
+                sender_seen.append(subject)
         
         logger.info(f"Duplicados promocionales detectados: {len(to_delete)}")
         return to_delete
@@ -458,6 +467,10 @@ class EmailClassifier:
             from_addr = email.get("from", "").lower()
             subject = email.get("subject", "").lower()
             
+            # PROTECCIÓN: UAL/ESI y remitentes protegidos nunca se eliminan
+            if self._is_untouchable(email):
+                continue
+
             # PROTECCIÓN: Si es dominio personal, NUNCA eliminar
             is_protected_domain = any(
                 protected_domain in from_addr 
